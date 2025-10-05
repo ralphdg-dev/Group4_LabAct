@@ -1,280 +1,476 @@
+import customtkinter as ctk
+import tkinter
 import requests
 import urllib.parse
-import sys
-from colorama import init, Fore, Back, Style
+import threading
+from PIL import Image, ImageTk
 
-# Initialize colorama for cross-platform colored terminal text
-init(autoreset=True)
-
-class MapQuestEnhanced:
+# =======================================================================================
+# SECTION 1: API LOGIC
+# This class contains the original, non-GUI logic for interacting with the API.
+# We've removed the print statements to let the GUI handle all user interaction.
+# =======================================================================================
+class RouteAPI:
     def __init__(self):
         self.route_url = "https://graphhopper.com/api/1/route?"
-        self.key = "560ec147-2865-4947-b87c-7d70228cbd08"
-        self.unit_system = "metric"  # Default unit system
-        self.vehicle_profiles = ["car", "bike", "foot"]
-        
-    def display_welcome(self):
-        """Display welcome message and application header"""
-        print(Fore.CYAN + "=" * 70)
-        print(Fore.YELLOW + "🚗 MAPQUEST ENHANCED ROUTE PLANNER 🗺️")
-        print(Fore.CYAN + "=" * 70)
-        print(Fore.WHITE + "Plan your journey with detailed directions and multiple options!")
-        print()
-    
-    def get_unit_preference(self):
-        """Allow user to choose between metric and imperial units"""
-        print(Fore.GREEN + "📏 UNIT SELECTION")
-        print(Fore.CYAN + "-" * 40)
-        print(Fore.WHITE + "1. Metric System (kilometers, meters)")
-        print(Fore.WHITE + "2. Imperial System (miles, feet)")
-        print(Fore.CYAN + "-" * 40)
-        
-        while True:
-            choice = input(Fore.YELLOW + "Choose unit system (1 or 2): ").strip()
-            if choice == "1":
-                self.unit_system = "metric"
-                print(Fore.GREEN + "✓ Metric system selected")
-                break
-            elif choice == "2":
-                self.unit_system = "imperial"
-                print(Fore.GREEN + "✓ Imperial system selected")
-                break
-            else:
-                print(Fore.RED + "❌ Invalid choice. Please enter 1 or 2.")
-        print()
-    
-    def format_distance(self, meters):
-        """Format distance based on selected unit system"""
-        if self.unit_system == "metric":
-            if meters >= 1000:
-                return f"{meters/1000:.1f} km"
-            else:
-                return f"{meters:.0f} m"
-        else:  # imperial
-            miles = meters / 1609.34
-            if miles >= 0.1:
-                return f"{miles:.1f} miles"
-            else:
-                feet = meters * 3.28084
-                return f"{feet:.0f} ft"
-    
-    def format_time(self, milliseconds):
-        """Format time duration in a readable format"""
-        total_seconds = milliseconds / 1000
-        hours = int(total_seconds // 3600)
-        minutes = int((total_seconds % 3600) // 60)
-        seconds = int(total_seconds % 60)
-        
-        if hours > 0:
-            return f"{hours}h {minutes:02d}m {seconds:02d}s"
-        elif minutes > 0:
-            return f"{minutes}m {seconds:02d}s"
-        else:
-            return f"{seconds}s"
-    
-    def display_vehicle_options(self):
-        """Display available vehicle profiles"""
-        print(Fore.GREEN + "🚗 VEHICLE PROFILES")
-        print(Fore.CYAN + "-" * 40)
-        for i, profile in enumerate(self.vehicle_profiles, 1):
-            icon = "🚗" if profile == "car" else "🚲" if profile == "bike" else "🚶"
-            print(Fore.WHITE + f"{i}. {icon} {profile.capitalize()}")
-        print(Fore.CYAN + "-" * 40)
-    
-    def geocoding(self, location):
-        """Enhanced geocoding with better error handling"""
-        if not location or location.strip() == "":
-            print(Fore.RED + "❌ Error: Location cannot be empty")
-            return None, None, None, None
-        
-        geocode_url = "https://graphhopper.com/api/1/geocode?"
-        url = geocode_url + urllib.parse.urlencode({
-            "q": location, 
-            "limit": "1", 
+        self.geocode_url = "https://graphhopper.com/api/1/geocode?"
+        self.key = "560ec147-2865-4947-b87c-7d70228cbd08" # Your GraphHopper key
+
+    def geocode(self, location):
+        """Geocodes a location string to get its latitude and longitude."""
+        if not location or not location.strip():
+            return {"status": "error", "message": "Location cannot be empty."}
+
+        url = self.geocode_url + urllib.parse.urlencode({
+            "q": location,
+            "limit": "1",
             "key": self.key
         })
+        try:
+            response = requests.get(url, timeout=10)
+            data = response.json()
+            if response.status_code == 200 and data.get("hits"):
+                point = data["hits"][0]["point"]
+                name = data["hits"][0].get("name", "Unknown")
+                country = data["hits"][0].get("country", "")
+                state = data["hits"][0].get("state", "")
+                full_name = f"{name}, {state}, {country}".strip(", ")
+                return {"status": "success", "lat": point["lat"], "lng": point["lng"], "name": full_name}
+            else:
+                return {"status": "error", "message": data.get("message", f"No results for {location}")}
+        except requests.exceptions.RequestException as e:
+            return {"status": "error", "message": f"Network error: {e}"}
+
+    def get_route(self, start_coords, end_coords, vehicle):
+        """Fetches the route between two points for a given vehicle."""
+        op = f"&point={start_coords['lat']},{start_coords['lng']}"
+        dp = f"&point={end_coords['lat']},{end_coords['lng']}"
+        
+        url = self.route_url + urllib.parse.urlencode({"key": self.key, "vehicle": vehicle}) + op + dp
+        try:
+            response = requests.get(url, timeout=15)
+            data = response.json()
+            if response.status_code == 200:
+                return {"status": "success", "data": data}
+            else:
+                return {"status": "error", "message": data.get("message", "Routing API error")}
+        except requests.exceptions.RequestException as e:
+            return {"status": "error", "message": f"Network error: {e}"}
+
+# =======================================================================================
+# SECTION 2: GUI APPLICATION
+# This class builds and manages the entire user interface using customtkinter.
+# =======================================================================================
+class FantasticRouterApp(ctk.CTk):
+    def __init__(self, api_logic):
+        super().__init__()
+        self.api_logic = api_logic
+
+        # --- Fantastic Four Color Palette ---
+        self.THEME_COLOR = "#2596be"  # Mr. Fantastic Blue
+        self.ACCENT_COLOR = "#67bed9"  # Cosmic Blue
+        self.TEXT_COLOR = "#EAF0F6"
+        self.BUTTON_COLOR = "#aa534a"  # Human Torch Orange
+        self.BUTTON_HOVER = "#d5834a"
+        self.NEW_BACKGROUND = "#feefce"  # Cream background
+        self.SECONDARY_COLOR = "#5a4a78"  # Purple for accents
+        self.HIGHLIGHT_COLOR = "#f0c850"  # Yellow for highlights
+
+        ctk.set_appearance_mode("Dark")
+        ctk.set_default_color_theme("blue")
+        
+        self.title("Fantastic Tour")
+        self.geometry("1000x750")
+        self.minsize(900, 650)
+        self.configure(fg_color=self.NEW_BACKGROUND)
+
+        # --- Configure Main Grid Layout ---
+        self.grid_columnconfigure(0, weight=1)
+        self.grid_rowconfigure(1, weight=1)
+
+        # --- Initialize UI Components ---
+        self.create_header_frame()
+        self.create_main_content_frame()
+        self.create_status_bar()
+
+    def create_header_frame(self):
+        """Creates the top banner with the logo and title."""
+        header_frame = ctk.CTkFrame(self, fg_color=self.THEME_COLOR, corner_radius=0, height=80)
+        header_frame.grid(row=0, column=0, sticky="ew", padx=0, pady=0)
+        header_frame.grid_columnconfigure(1, weight=1)
+        header_frame.grid_rowconfigure(0, weight=1)
+
+        # Logo with enhanced styling
+        logo_frame = ctk.CTkFrame(header_frame, fg_color="transparent", width=80)
+        logo_frame.grid(row=0, column=0, padx=15, pady=10, sticky="w")
         
         try:
-            print(Fore.BLUE + f"🔍 Searching for: {location}")
-            replydata = requests.get(url, timeout=10)
-            json_data = replydata.json()
-            json_status = replydata.status_code
-            
-            if json_status == 200 and len(json_data["hits"]) != 0:
-                lat = json_data["hits"][0]["point"]["lat"]
-                lng = json_data["hits"][0]["point"]["lng"]
-                name = json_data["hits"][0]["name"]
-                value = json_data["hits"][0]["osm_value"]
-                
-                # Build location name with available information
-                country = json_data["hits"][0].get("country", "")
-                state = json_data["hits"][0].get("state", "")
-                
-                if state and country:
-                    new_loc = f"{name}, {state}, {country}"
-                elif country:
-                    new_loc = f"{name}, {country}"
-                else:
-                    new_loc = name
-                
-                print(Fore.GREEN + f"✓ Found: {new_loc} ({value})")
-                return json_status, lat, lng, new_loc
-            else:
-                if json_status != 200:
-                    error_msg = json_data.get("message", "Unknown error")
-                    print(Fore.RED + f"❌ Geocoding API Error {json_status}: {error_msg}")
-                else:
-                    print(Fore.RED + f"❌ No results found for: {location}")
-                return None, None, None, None
-                
-        except requests.exceptions.RequestException as e:
-            print(Fore.RED + f"❌ Network error: {str(e)}")
-            return None, None, None, None
-        except Exception as e:
-            print(Fore.RED + f"❌ Unexpected error: {str(e)}")
-            return None, None, None, None
-    
-    def display_route_summary(self, paths_data, orig_name, dest_name, vehicle):
-        """Display formatted route summary"""
-        if paths_data["paths"][0]["distance"] == 0:
-            print(Fore.YELLOW + "⚠️  Start and end locations are the same!")
-            return
+            logo_image = ctk.CTkImage(Image.open("f4_logo.png"), size=(60, 60))
+            logo_label = ctk.CTkLabel(logo_frame, image=logo_image, text="", 
+                                     fg_color=self.ACCENT_COLOR, corner_radius=10)
+            logo_label.pack(padx=5, pady=5)
+        except FileNotFoundError:
+            # Fallback logo placeholder with F4 styling
+            logo_placeholder = ctk.CTkFrame(logo_frame, width=60, height=60, 
+                                          fg_color=self.SECONDARY_COLOR, corner_radius=10,
+                                          border_color=self.HIGHLIGHT_COLOR, border_width=2)
+            logo_placeholder.pack(padx=5, pady=5)
+            logo_text = ctk.CTkLabel(logo_placeholder, text="F4", 
+                                   font=ctk.CTkFont(family="Impact", size=20, weight="bold"),
+                                   text_color=self.TEXT_COLOR)
+            logo_text.place(relx=0.5, rely=0.5, anchor="center")
+
+        # Enhanced title with comic book styling
+        title_frame = ctk.CTkFrame(header_frame, fg_color="transparent")
+        title_frame.grid(row=0, column=1, sticky="w", padx=0, pady=10)
         
-        distance = paths_data["paths"][0]["distance"]
-        time_ms = paths_data["paths"][0]["time"]
+        title_label = ctk.CTkLabel(
+            title_frame,
+            text="FANTASTIC TOUR",
+            font=ctk.CTkFont(family="Impact", size=32, weight="bold"),
+            text_color=self.TEXT_COLOR
+        )
+        title_label.pack(side="left")
         
-        print(Fore.CYAN + "=" * 70)
-        print(Fore.YELLOW + f"📍 ROUTE SUMMARY: {orig_name} → {dest_name}")
-        print(Fore.CYAN + "=" * 70)
+        subtitle_label = ctk.CTkLabel(
+            title_frame,
+            text="",
+            font=ctk.CTkFont(family="Arial", size=14, weight="bold"),
+            text_color=self.HIGHLIGHT_COLOR
+        )
+        subtitle_label.pack(side="left", padx=(10, 0), pady=(8, 0))
+
+    def create_main_content_frame(self):
+        """Creates the main area with input fields and the results display."""
+        main_frame = ctk.CTkFrame(self, fg_color="transparent")
+        main_frame.grid(row=1, column=0, sticky="nsew", padx=25, pady=20)
+        main_frame.grid_columnconfigure(0, weight=1)
+        main_frame.grid_columnconfigure(1, weight=2)
+        main_frame.grid_rowconfigure(0, weight=1)
+
+        self.create_input_frame(main_frame)
+        self.create_output_frame(main_frame)
         
-        # Create formatted summary table
-        summary_data = [
-            ["Vehicle", f"{'🚗' if vehicle == 'car' else '🚲' if vehicle == 'bike' else '🚶'} {vehicle.upper()}"],
-            ["Total Distance", self.format_distance(distance)],
-            ["Estimated Time", self.format_time(time_ms)],
-            ["Unit System", "Metric" if self.unit_system == "metric" else "Imperial"]
+    def create_input_frame(self, parent):
+        """Creates the left-side panel for user inputs with enhanced Fantastic Four styling."""
+        input_frame = ctk.CTkFrame(parent, fg_color=self.THEME_COLOR, corner_radius=15,
+                                 border_color=self.ACCENT_COLOR, border_width=2)
+        input_frame.grid(row=0, column=0, sticky="nsew", padx=(0, 15))
+        input_frame.grid_columnconfigure(0, weight=1)
+        
+        # Header for input section
+        input_header = ctk.CTkFrame(input_frame, fg_color=self.SECONDARY_COLOR, corner_radius=10, height=40)
+        input_header.grid(row=0, column=0, sticky="ew", padx=15, pady=(15, 10))
+        input_header.grid_columnconfigure(0, weight=1)
+        
+        ctk.CTkLabel(input_header, text="MISSION PARAMETERS", 
+                    font=ctk.CTkFont(weight="bold", size=16),
+                    text_color=self.TEXT_COLOR).grid(row=0, column=0, padx=10, pady=5)
+        
+        # --- Location Inputs with enhanced styling ---
+        location_frame = ctk.CTkFrame(input_frame, fg_color="transparent")
+        location_frame.grid(row=1, column=0, sticky="ew", padx=15, pady=10)
+        
+        # Origin input with icon
+        origin_header = ctk.CTkFrame(location_frame, fg_color="transparent")
+        origin_header.grid(row=0, column=0, sticky="ew", pady=(0, 5))
+        ctk.CTkLabel(origin_header, text="🏢", font=ctk.CTkFont(size=16)).pack(side="left", padx=(0, 5))
+        ctk.CTkLabel(origin_header, text="The Baxter Building", 
+                    font=ctk.CTkFont(weight="bold")).pack(side="left")
+        
+        self.start_entry = ctk.CTkEntry(location_frame, placeholder_text="e.g., Times Square, NY",
+                                      border_color=self.ACCENT_COLOR, border_width=1,
+                                      height=35)
+        self.start_entry.grid(row=1, column=0, sticky="ew", pady=(0, 15))
+
+        # Destination input with icon
+        dest_header = ctk.CTkFrame(location_frame, fg_color="transparent")
+        dest_header.grid(row=2, column=0, sticky="ew", pady=(0, 5))
+        ctk.CTkLabel(dest_header, text="🏰", font=ctk.CTkFont(size=16)).pack(side="left", padx=(0, 5))
+        ctk.CTkLabel(dest_header, text="Latveria", 
+                    font=ctk.CTkFont(weight="bold")).pack(side="left")
+        
+        self.end_entry = ctk.CTkEntry(location_frame, placeholder_text="e.g., Eiffel Tower, Paris",
+                                    border_color=self.ACCENT_COLOR, border_width=1,
+                                    height=35)
+        self.end_entry.grid(row=3, column=0, sticky="ew", pady=(0, 20))
+
+        # --- Vehicle Selection with enhanced styling ---
+        vehicle_frame = ctk.CTkFrame(input_frame, fg_color=self.SECONDARY_COLOR, corner_radius=10)
+        vehicle_frame.grid(row=2, column=0, sticky="ew", padx=15, pady=10)
+        vehicle_frame.grid_columnconfigure(0, weight=1)
+        
+        ctk.CTkLabel(vehicle_frame, text="⚡ MODE OF TRANSPORTATION", 
+                    font=ctk.CTkFont(weight="bold"),
+                    text_color=self.TEXT_COLOR).grid(row=0, column=0, padx=15, pady=(10, 5), sticky="w")
+        
+        self.vehicle_var = tkinter.StringVar(value="car")
+        
+        vehicles = [
+            ("🚗 Fantasticar", "car", ""),
+            ("🚲 Bike", "bike", ""),
+            ("👣 Foot", "foot", "")
         ]
         
-        for item in summary_data:
-            print(Fore.WHITE + f"{item[0]:<20} {Fore.GREEN}{item[1]}")
-        
-        print(Fore.CYAN + "=" * 70)
-    
-    def display_detailed_directions(self, paths_data):
-        """Display step-by-step directions in a formatted table"""
-        instructions = paths_data["paths"][0]["instructions"]
-        
-        print(Fore.YELLOW + "📋 TURN-BY-TURN DIRECTIONS")
-        print(Fore.CYAN + "-" * 70)
-        print(Fore.WHITE + f"{'Step':<4} {'Instruction':<40} {'Distance':<15}")
-        print(Fore.CYAN + "-" * 70)
-        
-        for i, instruction in enumerate(instructions, 1):
-            text = instruction["text"]
-            distance = self.format_distance(instruction["distance"])
+        for i, (text, value, desc) in enumerate(vehicles, 1):
+            vehicle_option = ctk.CTkFrame(vehicle_frame, fg_color="transparent")
+            vehicle_option.grid(row=i, column=0, sticky="ew", padx=10, pady=2)
             
-            # Add icons based on instruction type
-            icon = "🛑" if "arrived" in text.lower() else "↷" if "turn" in text.lower() else "↑" if "continue" in text.lower() else "📍"
+            rb = ctk.CTkRadioButton(vehicle_option, text=text, variable=self.vehicle_var, value=value,
+                                  fg_color=self.BUTTON_COLOR, hover_color=self.BUTTON_HOVER,
+                                  font=ctk.CTkFont(weight="bold"))
+            rb.pack(side="left")
             
-            print(Fore.WHITE + f"{i:<4} {icon} {text:<37} {Fore.GREEN}{distance:<15}")
-        
-        print(Fore.CYAN + "-" * 70)
-    
-    def get_user_input(self, prompt, allow_quit=True):
-        """Get user input with quit option"""
-        quit_msg = Fore.MAGENTA + " (or 'quit' to exit)" if allow_quit else ""
-        user_input = input(Fore.YELLOW + f"{prompt}{quit_msg}: ").strip()
-        
-        if allow_quit and user_input.lower() in ['quit', 'q', 'exit']:
-            return None
-        return user_input
-    
-    def main_flow(self):
-        """Main application flow"""
-        self.display_welcome()
-        self.get_unit_preference()
-        
-        while True:
-            print(Fore.CYAN + "\n" + "=" * 70)
-            print(Fore.YELLOW + "🆕 NEW ROUTE PLANNING")
-            print(Fore.CYAN + "=" * 70)
-            
-            # Vehicle selection
-            self.display_vehicle_options()
-            vehicle_input = self.get_user_input("Choose vehicle profile")
-            if vehicle_input is None:
-                break
-            
-            vehicle = vehicle_input.lower()
-            if vehicle not in self.vehicle_profiles:
-                print(Fore.YELLOW + "⚠️  Invalid vehicle profile. Using 'car' as default.")
-                vehicle = "car"
-            
-            # Starting location
-            start_loc = self.get_user_input("Starting location")
-            if start_loc is None:
-                break
-            
-            orig = self.geocoding(start_loc)
-            if orig[0] is None:  # Error in geocoding
-                print(Fore.RED + "❌ Please try again with a different starting location.")
-                continue
-            
-            # Destination
-            dest_loc = self.get_user_input("Destination")
-            if dest_loc is None:
-                break
-            
-            dest = self.geocoding(dest_loc)
-            if dest[0] is None:  # Error in geocoding
-                print(Fore.RED + "❌ Please try again with a different destination.")
-                continue
-            
-            # Get route data
-            print(Fore.BLUE + "\n📡 Calculating route...")
-            try:
-                op = "&point=" + str(orig[1]) + "%2C" + str(orig[2])
-                dp = "&point=" + str(dest[1]) + "%2C" + str(dest[2])
-                paths_url = self.route_url + urllib.parse.urlencode({
-                    "key": self.key, 
-                    "vehicle": vehicle
-                }) + op + dp
-                
-                response = requests.get(paths_url, timeout=15)
-                paths_status = response.status_code
-                paths_data = response.json()
-                
-                if paths_status == 200:
-                    self.display_route_summary(paths_data, orig[3], dest[3], vehicle)
-                    self.display_detailed_directions(paths_data)
-                else:
-                    error_msg = paths_data.get("message", "Unknown routing error")
-                    print(Fore.RED + f"❌ Routing API Error {paths_status}: {error_msg}")
-                    
-            except requests.exceptions.Timeout:
-                print(Fore.RED + "❌ Request timeout. Please check your connection and try again.")
-            except requests.exceptions.RequestException as e:
-                print(Fore.RED + f"❌ Network error: {str(e)}")
-            except Exception as e:
-                print(Fore.RED + f"❌ Unexpected error: {str(e)}")
-            
-            # Ask if user wants to plan another route
-            print(Fore.CYAN + "\n" + "=" * 70)
-            continue_choice = self.get_user_input("Plan another route? (yes/no)", allow_quit=False)
-            if continue_choice and continue_choice.lower() in ['no', 'n']:
-                print(Fore.GREEN + "👋 Thank you for using MapQuest 2.0")
-                break
+            desc_label = ctk.CTkLabel(vehicle_option, text=desc, font=ctk.CTkFont(size=11),
+                                    text_color=self.TEXT_COLOR)
+            desc_label.pack(side="left", padx=(5, 0))
 
-def main():
-    """Main entry point with error handling"""
-    try:
-        app = MapQuestEnhanced()
-        app.main_flow()
-    except KeyboardInterrupt:
-        print(Fore.YELLOW + "\n👋 Program interrupted by user. Goodbye!")
-    except Exception as e:
-        print(Fore.RED + f"💥 Unexpected error: {str(e)}")
-        sys.exit(1)
+        # --- Unit Selection ---
+        unit_frame = ctk.CTkFrame(input_frame, fg_color=self.SECONDARY_COLOR, corner_radius=10)
+        unit_frame.grid(row=3, column=0, sticky="ew", padx=15, pady=10)
+        
+        ctk.CTkLabel(unit_frame, text="📏 MEASUREMENT SYSTEM", 
+                    font=ctk.CTkFont(weight="bold"),
+                    text_color=self.TEXT_COLOR).grid(row=0, column=0, padx=15, pady=(10, 5), sticky="w")
+        
+        self.unit_var = tkinter.StringVar(value="metric")
+        
+        unit_option_frame = ctk.CTkFrame(unit_frame, fg_color="transparent")
+        unit_option_frame.grid(row=1, column=0, sticky="ew", padx=10, pady=5)
+        
+        metric_rb = ctk.CTkRadioButton(unit_option_frame, text="Metric (km)", variable=self.unit_var, value="metric",
+                                     fg_color=self.BUTTON_COLOR, hover_color=self.BUTTON_HOVER)
+        metric_rb.pack(side="left", padx=(0, 15))
+        
+        imperial_rb = ctk.CTkRadioButton(unit_option_frame, text="Imperial (miles)", variable=self.unit_var, value="imperial",
+                                       fg_color=self.BUTTON_COLOR, hover_color=self.BUTTON_HOVER)
+        imperial_rb.pack(side="left")
 
+        # --- Action Button with enhanced styling ---
+        button_frame = ctk.CTkFrame(input_frame, fg_color="transparent")
+        button_frame.grid(row=4, column=0, sticky="ew", padx=15, pady=20)
+        
+        self.get_route_button = ctk.CTkButton(
+            button_frame, 
+            text="IT'S CLOBBERIN' TIME!",
+            font=ctk.CTkFont(size=18, weight="bold", family="Impact"),
+            fg_color=self.BUTTON_COLOR,
+            hover_color=self.BUTTON_HOVER,
+            border_color=self.HIGHLIGHT_COLOR,
+            border_width=2,
+            height=50,
+            corner_radius=25,
+            command=self.start_route_calculation
+        )
+        self.get_route_button.pack(fill="x", pady=10)
+
+    def create_output_frame(self, parent):
+        """Creates the right-side panel for displaying results with enhanced styling."""
+        output_frame = ctk.CTkFrame(parent, fg_color=self.THEME_COLOR, corner_radius=15,
+                                  border_color=self.ACCENT_COLOR, border_width=2)
+        output_frame.grid(row=0, column=1, sticky="nsew", padx=(15, 0))
+        output_frame.grid_rowconfigure(1, weight=1)
+        output_frame.grid_columnconfigure(0, weight=1)
+
+        # Output header
+        output_header = ctk.CTkFrame(output_frame, fg_color=self.SECONDARY_COLOR, corner_radius=10, height=40)
+        output_header.grid(row=0, column=0, sticky="ew", padx=15, pady=(15, 10))
+        ctk.CTkLabel(output_header, text="MISSION BRIEFING", 
+                    font=ctk.CTkFont(weight="bold", size=16),
+                    text_color=self.TEXT_COLOR).pack(pady=5)
+
+        # --- Summary Frame with comic book style ---
+        summary_frame = ctk.CTkFrame(output_frame, fg_color=self.ACCENT_COLOR, corner_radius=10)
+        summary_frame.grid(row=1, column=0, sticky="ew", padx=15, pady=(0, 10))
+        summary_frame.grid_columnconfigure((0, 1), weight=1)
+
+        # Distance display
+        distance_container = ctk.CTkFrame(summary_frame, fg_color=self.THEME_COLOR, corner_radius=8)
+        distance_container.grid(row=0, column=0, padx=10, pady=10, sticky="ew")
+        ctk.CTkLabel(distance_container, text="📏 DISTANCE", font=ctk.CTkFont(weight="bold", size=12),
+                    text_color=self.TEXT_COLOR).pack(pady=(5, 0))
+        self.distance_label = ctk.CTkLabel(distance_container, text="--", 
+                                         font=ctk.CTkFont(size=16, weight="bold"),
+                                         text_color=self.HIGHLIGHT_COLOR)
+        self.distance_label.pack(pady=(0, 5))
+
+        # Time display
+        time_container = ctk.CTkFrame(summary_frame, fg_color=self.THEME_COLOR, corner_radius=8)
+        time_container.grid(row=0, column=1, padx=10, pady=10, sticky="ew")
+        ctk.CTkLabel(time_container, text="⏱️ TIME", font=ctk.CTkFont(weight="bold", size=12),
+                    text_color=self.TEXT_COLOR).pack(pady=(5, 0))
+        self.time_label = ctk.CTkLabel(time_container, text="--", 
+                                     font=ctk.CTkFont(size=16, weight="bold"),
+                                     text_color=self.HIGHLIGHT_COLOR)
+        self.time_label.pack(pady=(0, 5))
+
+        # --- Directions Textbox with enhanced styling ---
+        directions_header = ctk.CTkFrame(output_frame, fg_color="transparent")
+        directions_header.grid(row=2, column=0, sticky="ew", padx=15, pady=(5, 0))
+        ctk.CTkLabel(directions_header, text="🗺️ TURN-BY-TURN DIRECTIONS", 
+                    font=ctk.CTkFont(weight="bold"),
+                    text_color=self.TEXT_COLOR).pack(side="left")
+        
+        self.directions_textbox = ctk.CTkTextbox(
+            output_frame, 
+            state="disabled",
+            font=ctk.CTkFont(family="Consolas", size=12),
+            wrap="word",
+            border_color=self.ACCENT_COLOR,
+            border_width=2,
+            corner_radius=10,
+            fg_color="#1a1a2e",
+            text_color="#ffffff"
+        )
+        self.directions_textbox.grid(row=3, column=0, sticky="nsew", padx=15, pady=(5, 15))
+        
+    def create_status_bar(self):
+        """Creates a status bar at the bottom of the window."""
+        status_frame = ctk.CTkFrame(self, fg_color=self.SECONDARY_COLOR, corner_radius=0, height=30)
+        status_frame.grid(row=2, column=0, sticky="ew", padx=0, pady=0)
+        status_frame.grid_columnconfigure(0, weight=1)
+        
+        self.status_label = ctk.CTkLabel(
+            status_frame, 
+            text="  Ready for mission planning...", 
+            font=ctk.CTkFont(size=12),
+            text_color=self.TEXT_COLOR,
+            anchor="w"
+        )
+        self.status_label.grid(row=0, column=0, sticky="w", padx=15)
+        
+        # Version info
+        version_label = ctk.CTkLabel(
+            status_frame,
+            text="Fantastic Tour v1.0  ",
+            font=ctk.CTkFont(size=10),
+            text_color=self.HIGHLIGHT_COLOR
+        )
+        version_label.grid(row=0, column=1, sticky="e", padx=15)
+
+    def start_route_calculation(self):
+        """Disables the button and starts the API calls in a new thread to prevent GUI freezing."""
+        self.get_route_button.configure(state="disabled", text="RECALIBRATING...")
+        # Create and start a new thread
+        thread = threading.Thread(target=self.get_route_logic)
+        thread.daemon = True # Allows main program to exit even if thread is running
+        thread.start()
+
+    def get_route_logic(self):
+        """The core logic that runs in the background thread."""
+        start_loc = self.start_entry.get()
+        dest_loc = self.end_entry.get()
+        vehicle = self.vehicle_var.get()
+
+        # --- Geocode Origin ---
+        self.update_status("🔍 Analyzing origin coordinates...", "blue")
+        orig = self.api_logic.geocode(start_loc)
+        if orig['status'] == 'error':
+            self.update_status(f"❌ Origin Error: {orig['message']}", "red")
+            self.reset_button()
+            return
+
+        # --- Geocode Destination ---
+        self.update_status(f"📍 Found {orig['name']}. Analyzing destination...", "blue")
+        dest = self.api_logic.geocode(dest_loc)
+        if dest['status'] == 'error':
+            self.update_status(f"❌ Destination Error: {dest['message']}", "red")
+            self.reset_button()
+            return
+        
+        if orig['lat'] == dest['lat'] and orig['lng'] == dest['lng']:
+            self.update_status("🔥 Flame Off! Origin and destination are the same.", "orange")
+            self.reset_button()
+            return
+
+        # --- Get Route ---
+        self.update_status(f"🎯 Found {dest['name']}. Plotting course... Flame On! 🔥", "blue")
+        route_info = self.api_logic.get_route(orig, dest, vehicle)
+        if route_info['status'] == 'error':
+            self.update_status(f"❌ Routing Error: {route_info['message']}", "red")
+            self.reset_button()
+            return
+
+        # --- Process and Display Results ---
+        self.update_status("✅ Route calculated! Assembling report...", "green")
+        self.after(100, lambda: self.display_results(route_info['data'])) # Safely update GUI from main thread
+        
+    def display_results(self, data):
+        """Formats the API data and updates the GUI components."""
+        path = data['paths'][0]
+        
+        # Format Summary
+        distance = self.format_distance(path['distance'])
+        time = self.format_time(path['time'])
+        self.distance_label.configure(text=f"{distance}")
+        self.time_label.configure(text=f"{time}")
+        
+        # Format Directions
+        directions_text = "🚀 FANTASTIC TOUR MISSION BRIEFING 🚀\n" + "="*50 + "\n\n"
+        for i, instruction in enumerate(path['instructions'], 1):
+            dist = self.format_distance(instruction['distance'])
+            text = instruction['text']
+            # Enhanced icons for better visual representation
+            if "arrived" in text.lower():
+                icon = "🏁 ARRIVED"
+            elif "turn left" in text.lower():
+                icon = "↩️ LEFT"
+            elif "turn right" in text.lower():
+                icon = "↪️ RIGHT"
+            elif "roundabout" in text.lower():
+                icon = "🔄 ROUND"
+            elif "keep" in text.lower():
+                icon = "⬆️ CONTINUE"
+            elif "exit" in text.lower():
+                icon = "🚪 EXIT"
+            else:
+                icon = "➡️ NEXT"
+                
+            directions_text += f"{i:>2}. {icon:<12} {text:<40} [{dist}]\n"
+        
+        directions_text += f"\n{'='*50}\n✨ MISSION ACCOMPLISHED! ✨"
+        
+        self.directions_textbox.configure(state="normal")
+        self.directions_textbox.delete("1.0", "end")
+        self.directions_textbox.insert("1.0", directions_text)
+        self.directions_textbox.configure(state="disabled")
+
+        self.reset_button()
+        self.update_status("🎉 Mission accomplished! Route briefing ready.", "green")
+        
+    def update_status(self, message, color):
+        """Updates the status bar text and color safely from any thread."""
+        colors = {"blue": self.ACCENT_COLOR, "red": "#E01E1E", "green": "#1FB03A", "orange": self.BUTTON_COLOR}
+        self.after(0, lambda: self.status_label.configure(
+            text=f"  {message}", 
+            text_color=colors.get(color, self.TEXT_COLOR)
+        ))
+        
+    def reset_button(self):
+        """Resets the main button to its initial state."""
+        self.after(0, lambda: self.get_route_button.configure(
+            state="normal", 
+            text="IT'S CLOBBERIN' TIME!"
+        ))
+
+    # --- Formatting Helper Functions ---
+    def format_distance(self, meters):
+        if self.unit_var.get() == "metric":
+            return f"{meters/1000:.2f} km" if meters >= 1000 else f"{meters:.0f} m"
+        else: # imperial
+            miles = meters / 1609.34
+            return f"{miles:.2f} miles" if miles >= 0.1 else f"{meters * 3.28084:.0f} ft"
+
+    def format_time(self, milliseconds):
+        s = milliseconds / 1000
+        h, s = divmod(s, 3600)
+        m, s = divmod(s, 60)
+        return f"{int(h)}h {int(m):02d}m" if h > 0 else f"{int(m)}m {int(s):02d}s"
+
+# =======================================================================================
+# SECTION 3: APPLICATION LAUNCHER
+# =======================================================================================
 if __name__ == "__main__":
-    main()
+    api = RouteAPI()  # Create an instance of the backend logic
+    app = FantasticRouterApp(api)  # Create the GUI and pass the logic to it
+    app.mainloop()
