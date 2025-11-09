@@ -15,10 +15,6 @@ except ImportError:
     MAP_AVAILABLE = False
     print("Note: Install tkintermapview for embedded maps: pip install tkintermapview")
 
-# =======================================================================================
-# SECTION 1: API LOGIC
-# =======================================================================================
-
 load_dotenv()
 GRAPHOPPER_API_KEY = os.getenv("GRAPHHOPPER_API_KEY")
 GOOGLE_MAPS_API_KEY = os.getenv("GOOGLE_MAPS_API_KEY")
@@ -124,20 +120,15 @@ class RouteAPI:
         url = f"https://www.google.com/maps/dir/?api=1&origin={start}&destination={end}&travelmode={mode}"
         return url
 
-# =======================================================================================
-# SECTION 2: GUI APPLICATION
-# =======================================================================================
-
 class FantasticRouterApp(ctk.CTk):
     def __init__(self, api_logic):
         super().__init__()
         self.api_logic = api_logic
         self.is_calculating = False
         self.current_route_data = None
-        self.map_markers = []  # Store map markers for cleanup
-        self.map_path = None   # Store map path for cleanup
+        self.map_markers = []
+        self.map_path = None 
         
-        # Premium Color Palette
         self.PRIMARY_BLUE = "#1565C0"
         self.DARK_BLUE = "#0D47A1"
         self.LIGHT_BLUE = "#42A5F5"
@@ -170,8 +161,6 @@ class FantasticRouterApp(ctk.CTk):
         self.create_main_content_frame()
         self.create_status_bar()
 
-    # ---------------------------- HEADER FRAME ----------------------------
-
     def create_header_frame(self):
         header_frame = ctk.CTkFrame(self, fg_color=self.PRIMARY_BLUE, corner_radius=0, height=110)
         header_frame.grid(row=0, column=0, sticky="ew", padx=0, pady=0)
@@ -183,7 +172,6 @@ class FantasticRouterApp(ctk.CTk):
         left_section = ctk.CTkFrame(content_frame, fg_color="transparent")
         left_section.pack(side="left", fill="y")
         
-        # Logo with better styling
         try:
             from PIL import Image
             logo_image = ctk.CTkImage(Image.open("f4_logo.png"), size=(55, 55))
@@ -197,7 +185,6 @@ class FantasticRouterApp(ctk.CTk):
             ctk.CTkLabel(logo_frame, text="F4", font=ctk.CTkFont(size=22, weight="bold"),
                         text_color=self.TEXT_LIGHT).place(relx=0.5, rely=0.5, anchor="center")
         
-        # Title with enhanced styling
         title_section = ctk.CTkFrame(left_section, fg_color="transparent")
         title_section.pack(side="left")
         ctk.CTkLabel(title_section, text="FANTASTIC TOUR",
@@ -206,8 +193,6 @@ class FantasticRouterApp(ctk.CTk):
         ctk.CTkLabel(title_section, text="Advanced Route Planning & Navigation System",
                     font=ctk.CTkFont(size=14),
                     text_color=self.LIGHT_BLUE).pack(anchor="w", pady=(2, 0))
-
-    # ---------------------------- MAIN CONTENT ----------------------------
 
     def create_main_content_frame(self):
         main_frame = ctk.CTkFrame(self, fg_color="transparent")
@@ -220,7 +205,6 @@ class FantasticRouterApp(ctk.CTk):
         self.create_output_panel(main_frame)
 
     def create_input_panel(self, parent):
-        # Make scrollable for smaller screens
         panel_container = ctk.CTkScrollableFrame(parent, fg_color="transparent")
         panel_container.grid(row=0, column=0, sticky="nsew", padx=(0, 20))
         
@@ -229,14 +213,12 @@ class FantasticRouterApp(ctk.CTk):
         panel.pack(fill="both", expand=True)
         panel.grid_columnconfigure(0, weight=1)
         
-        # Elegant Header
         header = ctk.CTkFrame(panel, fg_color=self.PRIMARY_BLUE, corner_radius=12, height=60)
         header.grid(row=0, column=0, sticky="ew", padx=25, pady=(25, 20))
         ctk.CTkLabel(header, text="🎯 Route Configuration", 
                     font=ctk.CTkFont(size=18, weight="bold"),
                     text_color=self.TEXT_LIGHT).pack(pady=15)
         
-        # Origin Section
         origin_section = ctk.CTkFrame(panel, fg_color="transparent")
         origin_section.grid(row=1, column=0, sticky="ew", padx=25, pady=(15, 10))
         origin_section.grid_columnconfigure(0, weight=1)
@@ -258,7 +240,6 @@ class FantasticRouterApp(ctk.CTk):
                                        corner_radius=10)
         self.start_entry.grid(row=1, column=0, sticky="ew", pady=(0, 20))
         
-        # Destination Section
         dest_section = ctk.CTkFrame(panel, fg_color="transparent")
         dest_section.grid(row=2, column=0, sticky="ew", padx=25, pady=(10, 10))
         dest_section.grid_columnconfigure(0, weight=1)
@@ -280,7 +261,6 @@ class FantasticRouterApp(ctk.CTk):
                                      corner_radius=10)
         self.end_entry.grid(row=1, column=0, sticky="ew", pady=(0, 25))
         
-        # Vehicle Selection
         vehicle_frame = ctk.CTkFrame(panel, fg_color=self.CARD_BG, corner_radius=12,
                                     border_width=2, border_color=self.BORDER_LIGHT)
         vehicle_frame.grid(row=3, column=0, sticky="ew", padx=25, pady=(15, 20))
@@ -318,7 +298,6 @@ class FantasticRouterApp(ctk.CTk):
         
         ctk.CTkFrame(vehicle_frame, fg_color="transparent", height=10).pack()
         
-        # Calculate Button
         button_container = ctk.CTkFrame(panel, fg_color="transparent")
         button_container.grid(row=4, column=0, sticky="ew", padx=25, pady=(25, 20))
         
@@ -334,7 +313,6 @@ class FantasticRouterApp(ctk.CTk):
         )
         self.get_route_button.pack(fill="x")
         
-        # External Links Button
         links_btn = ctk.CTkButton(
             button_container,
             text="🌐 Open in Google Maps",
@@ -349,7 +327,6 @@ class FantasticRouterApp(ctk.CTk):
         self.view_gmaps_btn = links_btn
         self.view_gmaps_btn.configure(state="disabled")
 
-    # ---------------------------- OUTPUT PANEL ----------------------------
 
     def create_output_panel(self, parent):
         scroll_container = ctk.CTkScrollableFrame(parent, fg_color="transparent")
@@ -357,26 +334,22 @@ class FantasticRouterApp(ctk.CTk):
         scroll_container.grid_columnconfigure(0, weight=1)
         scroll_container.grid_rowconfigure(0, weight=1)
 
-        # Inner panel that fills the scrollable area
         panel = ctk.CTkFrame(scroll_container, fg_color=self.BG_WHITE, corner_radius=15)
         panel.grid(row=0, column=0, sticky="nsew")
         panel.grid_columnconfigure(0, weight=1)
         panel.grid_rowconfigure(3, weight=6)
         panel.grid_rowconfigure(5, weight=2)
         panel.grid_rowconfigure(6, weight=1)
-        # Header
         header = ctk.CTkFrame(panel, fg_color=self.PRIMARY_BLUE, corner_radius=12, height=60)
         header.grid(row=0, column=0, sticky="ew", padx=25, pady=(25, 20))
         ctk.CTkLabel(header, text="📊 Route Information & Map", 
                     font=ctk.CTkFont(size=18, weight="bold"),
                     text_color=self.TEXT_LIGHT).pack(pady=15)
 
-        # Summary Cards
         summary_container = ctk.CTkFrame(panel, fg_color="transparent")
         summary_container.grid(row=1, column=0, sticky="ew", padx=25, pady=(0, 20))
         summary_container.grid_columnconfigure((0, 1), weight=1)
 
-        # Distance Card
         distance_card = ctk.CTkFrame(summary_container, fg_color=self.CARD_BG, 
                                     corner_radius=12, border_width=2, border_color=self.BORDER_LIGHT)
         distance_card.grid(row=0, column=0, sticky="ew", padx=(0, 12))
@@ -388,7 +361,6 @@ class FantasticRouterApp(ctk.CTk):
                                         text_color=self.PRIMARY_BLUE)
         self.distance_label.pack(pady=(0, 20))
 
-        # Time Card
         time_card = ctk.CTkFrame(summary_container, fg_color=self.CARD_BG, 
                                 corner_radius=12, border_width=2, border_color=self.BORDER_LIGHT)
         time_card.grid(row=0, column=1, sticky="ew", padx=(12, 0))
@@ -400,17 +372,14 @@ class FantasticRouterApp(ctk.CTk):
                                     text_color=self.PRIMARY_BLUE)
         self.time_label.pack(pady=(0, 20))
 
-        # Map Section Header
         map_header_section = ctk.CTkFrame(panel, fg_color="transparent")
         map_header_section.grid(row=2, column=0, sticky="ew", padx=25, pady=(10, 10))
         ctk.CTkLabel(map_header_section, text="🗺️ Interactive Map View (Expanded)",
                     font=ctk.CTkFont(size=15, weight="bold"),
                     text_color=self.TEXT_DARK).pack(anchor="w")
 
-# Directions and map same height
         map_height = 500
 
-        # Map frame
         if MAP_AVAILABLE:
             map_frame = ctk.CTkFrame(
                 panel,
@@ -446,7 +415,6 @@ class FantasticRouterApp(ctk.CTk):
                 justify="center"
             ).place(relx=0.5, rely=0.5, anchor="center")
 
-        # Directions section
         directions_section = ctk.CTkFrame(panel, fg_color="transparent")
         directions_section.grid(row=4, column=0, sticky="ew", padx=25, pady=(10, 10))
         ctk.CTkLabel(
@@ -465,11 +433,9 @@ class FantasticRouterApp(ctk.CTk):
             border_width=2,
             border_color=self.BORDER_LIGHT,
             corner_radius=10,
-            height=map_height  # same as map
+            height=map_height
         )
         self.directions_textbox.grid(row=5, column=0, sticky="ew", padx=25, pady=(5, 20))
-
-    # ---------------------------- STATUS BAR ----------------------------
 
     def create_status_bar(self):
         status_frame = ctk.CTkFrame(self, fg_color=self.PRIMARY_BLUE, corner_radius=0, height=45)
@@ -484,14 +450,11 @@ class FantasticRouterApp(ctk.CTk):
         )
         self.status_label.pack(side="left", padx=50, pady=12)
 
-    # ---------------------------- MAP METHODS ----------------------------
-
     def clear_map(self):
         """Clear all markers and paths from the map."""
         if not MAP_AVAILABLE:
             return
         
-        # Delete all markers
         for marker in self.map_markers:
             try:
                 marker.delete()
@@ -499,7 +462,6 @@ class FantasticRouterApp(ctk.CTk):
                 pass
         self.map_markers.clear()
         
-        # Delete path
         if self.map_path:
             try:
                 self.map_path.delete()
@@ -512,10 +474,8 @@ class FantasticRouterApp(ctk.CTk):
         if not MAP_AVAILABLE:
             return
         
-        # Clear existing markers and paths
         self.clear_map()
         
-        # Add start marker (green)
         start_marker = self.map_widget.set_marker(
             start_coords['lat'], 
             start_coords['lng'],
@@ -525,7 +485,6 @@ class FantasticRouterApp(ctk.CTk):
         )
         self.map_markers.append(start_marker)
         
-        # Add end marker (red)
         end_marker = self.map_widget.set_marker(
             end_coords['lat'], 
             end_coords['lng'],
@@ -535,35 +494,27 @@ class FantasticRouterApp(ctk.CTk):
         )
         self.map_markers.append(end_marker)
         
-        # Draw route path if available
         if route_points and len(route_points) > 1:
-            # Convert route points to list of (lat, lng) tuples
-            path_coords = [(pt[1], pt[0]) for pt in route_points]  # Note: route_points are [lng, lat]
+            path_coords = [(pt[1], pt[0]) for pt in route_points] 
             
-            # Draw the path
             self.map_path = self.map_widget.set_path(path_coords, color="#2196F3", width=4)
         
-        # Fit map to show both markers
         try:
             top_left = (
-                max(start_coords['lat'], end_coords['lat']),   # higher latitude
-                min(start_coords['lng'], end_coords['lng'])    # smaller longitude
+                max(start_coords['lat'], end_coords['lat']), 
+                min(start_coords['lng'], end_coords['lng'])  
             )
             bottom_right = (
-                min(start_coords['lat'], end_coords['lat']),   # lower latitude
-                max(start_coords['lng'], end_coords['lng'])    # larger longitude
+                min(start_coords['lat'], end_coords['lat']),  
+                max(start_coords['lng'], end_coords['lng'])   
             )
             self.map_widget.fit_bounding_box(top_left, bottom_right)
         except Exception as e:
             print(f"[Map Warning] Could not fit bounding box: {e}")
-            # fallback: center between points
             center_lat = (start_coords['lat'] + end_coords['lat']) / 2
             center_lng = (start_coords['lng'] + end_coords['lng']) / 2
             self.map_widget.set_position(center_lat, center_lng)
             self.map_widget.set_zoom(10)
-
-
-    # ---------------------------- ROUTE LOGIC ----------------------------
 
     def start_route_calculation(self):
         if self.is_calculating:
@@ -614,12 +565,10 @@ class FantasticRouterApp(ctk.CTk):
         time_min = path["time"] / 60000
         instructions = path["instructions"]
         
-        # Extract route coordinates for map display
         route_points = None
         if "points" in path and "coordinates" in path["points"]:
             route_points = path["points"]["coordinates"]
         
-        # Store route data
         self.current_route_data = {
             "start_coords": {"lat": start_data["lat"], "lng": start_data["lng"]},
             "end_coords": {"lat": end_data["lat"], "lng": end_data["lng"]},
@@ -627,7 +576,6 @@ class FantasticRouterApp(ctk.CTk):
             "vehicle": vehicle
         }
         
-        # Update map with route
         if MAP_AVAILABLE:
             self.after(0, lambda: self.update_map(
                 self.current_route_data["start_coords"],
@@ -635,7 +583,6 @@ class FantasticRouterApp(ctk.CTk):
                 route_points
             ))
         
-        # Update distance and time labels
         self.distance_label.configure(text=f"{distance_km:.2f} km")
         
         if time_min >= 60:
@@ -645,7 +592,6 @@ class FantasticRouterApp(ctk.CTk):
         else:
             self.time_label.configure(text=f"{time_min:.0f} min")
         
-        # Update directions
         directions_text = ""
         for i, inst in enumerate(instructions, 1):
             directions_text += f"{i}. {inst['text']}\n"
@@ -655,7 +601,6 @@ class FantasticRouterApp(ctk.CTk):
         self.directions_textbox.insert("1.0", directions_text)
         self.directions_textbox.configure(state="disabled")
 
-        # Enable Google Maps button
         self.view_gmaps_btn.configure(state="normal")
 
         self.status_label.configure(text=f"✓ Route calculated! Distance: {distance_km:.2f} km • Time: {time_min:.0f} min")
@@ -679,11 +624,6 @@ class FantasticRouterApp(ctk.CTk):
             self.status_label.configure(text="✓ Route opened in Google Maps!")
         except Exception as e:
             messagebox.showerror("Error", f"Failed to open Google Maps: {str(e)}")
-
-
-# =======================================================================================
-# SECTION 3: RUN APP
-# =======================================================================================
 
 if __name__ == "__main__":
     api_logic = RouteAPI()
