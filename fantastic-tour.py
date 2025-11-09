@@ -90,7 +90,7 @@ class RouteAPI:
             return api_key_check
         op = f"&point={start_coords['lat']},{start_coords['lng']}"
         dp = f"&point={end_coords['lat']},{end_coords['lng']}"
-        url = self.route_url + urllib.parse.urlencode({"key": self.key, "vehicle": vehicle}) + op + dp
+        url = self.route_url + urllib.parse.urlencode({"key": self.key, "vehicle": vehicle, "points_encoded": "false"}) + op + dp
         try:
             response = requests.get(url, timeout=15)
             if response.status_code != 200:
@@ -102,14 +102,38 @@ class RouteAPI:
         except Exception as e:
             return {"status": "error", "message": f"Unexpected routing error: {str(e)}"}
 
-    def get_static_map_url(self, start_coords, end_coords, width=400, height=300):
-        """Generate a Google Static Maps URL for the route."""
+    def get_static_map_url(self, start_coords, end_coords, route_points=None, width=900, height=450):
+        """Generate a Google Static Maps URL with the actual route path from GraphHopper."""
         if not GOOGLE_MAPS_API_KEY:
             return None
+        
         start = f"{start_coords['lat']},{start_coords['lng']}"
         end = f"{end_coords['lat']},{end_coords['lng']}"
-        markers = f"markers=color:blue|label:S|{start}&markers=color:red|label:E|{end}"
-        path = f"path=color:0x2596be|weight:4|{start}|{end}"
+        
+        # Markers for start and end points
+        markers = f"markers=color:0x1976D2|label:A|{start}&markers=color:0xD32F2F|label:B|{end}"
+        
+        # Build path from route points if available
+        if route_points and len(route_points) > 0:
+            # Google Maps Static API has URL length limitations
+            # Simplify path by sampling points if there are too many
+            max_points = 100  # Limit to avoid URL length issues
+            if len(route_points) > max_points:
+                # Sample points evenly across the route
+                step = len(route_points) // max_points
+                sampled_points = route_points[::step]
+                # Always include the last point
+                if route_points[-1] not in sampled_points:
+                    sampled_points.append(route_points[-1])
+                route_points = sampled_points
+            
+            # Build the path string with all route points
+            path_coords = "|".join([f"{pt[1]},{pt[0]}" for pt in route_points])  # Note: lat,lng format
+            path = f"path=color:0x2196F3|weight:5|{path_coords}"
+        else:
+            # Fallback to straight line if no route points available
+            path = f"path=color:0x2196F3|weight:5|{start}|{end}"
+        
         url = f"https://maps.googleapis.com/maps/api/staticmap?size={width}x{height}&{markers}&{path}&key={GOOGLE_MAPS_API_KEY}"
         return url
 
@@ -121,25 +145,34 @@ class FantasticRouterApp(ctk.CTk):
     def __init__(self, api_logic):
         super().__init__()
         self.api_logic = api_logic
-        self.THEME_COLOR = "#2596be"
-        self.ACCENT_COLOR = "#67bed9"
-        self.TEXT_COLOR = "#EAF0F6"
-        self.BUTTON_COLOR = "#aa534a"
-        self.BUTTON_HOVER = "#d5834a"
-        self.NEW_BACKGROUND = "#feefce"
-        self.SECONDARY_COLOR = "#5a4a78"
-        self.HIGHLIGHT_COLOR = "#f0c850"
-        self.ERROR_COLOR = "#e74c3c"
-        self.WARNING_COLOR = "#f39c12"
-        self.SUCCESS_COLOR = "#27ae60"
+        self.is_calculating = False
+        
+        # Premium Color Palette
+        self.PRIMARY_BLUE = "#1565C0"
+        self.DARK_BLUE = "#0D47A1"
+        self.LIGHT_BLUE = "#42A5F5"
+        self.ACCENT_ORANGE = "#FF6F00"
+        self.HOVER_ORANGE = "#FF8F00"
+        self.BG_GRADIENT_START = "#E3F2FD"
+        self.BG_GRADIENT_END = "#F5F5F5"
+        self.BG_WHITE = "#FFFFFF"
+        self.TEXT_DARK = "#212121"
+        self.TEXT_SECONDARY = "#616161"
+        self.TEXT_LIGHT = "#FFFFFF"
+        self.CARD_BG = "#FAFAFA"
+        self.SUCCESS = "#4CAF50"
+        self.ERROR = "#F44336"
+        self.BORDER_LIGHT = "#E0E0E0"
+        self.SHADOW_COLOR = "#90A4AE"
 
-        ctk.set_appearance_mode("Dark")
+        ctk.set_appearance_mode("Light")
         ctk.set_default_color_theme("blue")
         
-        self.title("Fantastic Tour")
-        self.geometry("1000x750")
-        self.minsize(900, 650)
-        self.configure(fg_color=self.NEW_BACKGROUND)
+        self.title("Fantastic Tour - Premium Route Planner")
+        self.geometry("1300x850")
+        self.minsize(1200, 750)
+        self.configure(fg_color=self.BG_GRADIENT_START)
+        
         self.grid_columnconfigure(0, weight=1)
         self.grid_rowconfigure(1, weight=1)
 
@@ -150,221 +183,429 @@ class FantasticRouterApp(ctk.CTk):
     # ---------------------------- HEADER FRAME ----------------------------
 
     def create_header_frame(self):
-        header_frame = ctk.CTkFrame(self, fg_color=self.THEME_COLOR, corner_radius=0, height=80)
+        header_frame = ctk.CTkFrame(self, fg_color=self.PRIMARY_BLUE, corner_radius=0, height=110)
         header_frame.grid(row=0, column=0, sticky="ew", padx=0, pady=0)
-        header_frame.grid_columnconfigure(1, weight=1)
-        header_frame.grid_rowconfigure(0, weight=1)
-
-        logo_frame = ctk.CTkFrame(header_frame, fg_color="transparent", width=80)
-        logo_frame.grid(row=0, column=0, padx=15, pady=10, sticky="w")
+        header_frame.grid_columnconfigure(0, weight=1)
+        
+        content_frame = ctk.CTkFrame(header_frame, fg_color="transparent")
+        content_frame.pack(fill="both", expand=True, padx=50, pady=25)
+        
+        left_section = ctk.CTkFrame(content_frame, fg_color="transparent")
+        left_section.pack(side="left", fill="y")
+        
+        # Logo with better styling
         try:
-            logo_image = ctk.CTkImage(Image.open("f4_logo.png"), size=(60, 60))
-            logo_label = ctk.CTkLabel(logo_frame, image=logo_image, text="", fg_color=self.ACCENT_COLOR, corner_radius=10)
-            logo_label.pack(padx=5, pady=5)
+            logo_image = ctk.CTkImage(Image.open("f4_logo.png"), size=(55, 55))
+            logo_label = ctk.CTkLabel(left_section, image=logo_image, text="")
+            logo_label.pack(side="left", padx=(0, 20))
         except FileNotFoundError:
-            logo_placeholder = ctk.CTkFrame(logo_frame, width=60, height=60, fg_color=self.SECONDARY_COLOR, corner_radius=10,
-                                            border_color=self.HIGHLIGHT_COLOR, border_width=2)
-            logo_placeholder.pack(padx=5, pady=5)
-            logo_text = ctk.CTkLabel(logo_placeholder, text="F4", font=ctk.CTkFont(family="Impact", size=20, weight="bold"),
-                                     text_color=self.TEXT_COLOR)
-            logo_text.place(relx=0.5, rely=0.5, anchor="center")
-        title_frame = ctk.CTkFrame(header_frame, fg_color="transparent")
-        title_frame.grid(row=0, column=1, sticky="w", padx=0, pady=10)
-        title_label = ctk.CTkLabel(title_frame, text="FANTASTIC TOUR",
-                                   font=ctk.CTkFont(family="Impact", size=32, weight="bold"),
-                                   text_color=self.TEXT_COLOR)
-        title_label.pack(side="left")
+            logo_frame = ctk.CTkFrame(left_section, width=55, height=55, 
+                                     fg_color=self.DARK_BLUE, corner_radius=27)
+            logo_frame.pack(side="left", padx=(0, 20))
+            logo_frame.pack_propagate(False)
+            ctk.CTkLabel(logo_frame, text="F4", font=ctk.CTkFont(size=22, weight="bold"),
+                        text_color=self.TEXT_LIGHT).place(relx=0.5, rely=0.5, anchor="center")
+        
+        # Title with enhanced styling
+        title_section = ctk.CTkFrame(left_section, fg_color="transparent")
+        title_section.pack(side="left")
+        ctk.CTkLabel(title_section, text="FANTASTIC TOUR",
+                    font=ctk.CTkFont(size=32, weight="bold"),
+                    text_color=self.TEXT_LIGHT).pack(anchor="w")
+        ctk.CTkLabel(title_section, text="Advanced Route Planning & Navigation System",
+                    font=ctk.CTkFont(size=14),
+                    text_color=self.LIGHT_BLUE).pack(anchor="w", pady=(2, 0))
 
     # ---------------------------- MAIN CONTENT ----------------------------
 
     def create_main_content_frame(self):
-        main_frame = ctk.CTkFrame(self, fg_color="transparent")
-        main_frame.grid(row=1, column=0, sticky="nsew", padx=25, pady=20)
-        main_frame.grid_columnconfigure(0, weight=1)
-        main_frame.grid_columnconfigure(1, weight=2)
+        main_frame = ctk.CTkScrollableFrame(self, fg_color="transparent")
+        main_frame.grid(row=1, column=0, sticky="nsew", padx=35, pady=25)
+        main_frame.grid_columnconfigure(0, weight=2, minsize=450)
+        main_frame.grid_columnconfigure(1, weight=3, minsize=700)
         main_frame.grid_rowconfigure(0, weight=1)
 
-        self.create_input_frame(main_frame)
-        self.create_output_frame(main_frame)
+        self.create_input_panel(main_frame)
+        self.create_output_panel(main_frame)
 
-    def create_input_frame(self, parent):
-        input_frame = ctk.CTkFrame(parent, fg_color=self.THEME_COLOR, corner_radius=15,
-                                 border_color=self.ACCENT_COLOR, border_width=2)
-        input_frame.grid(row=0, column=0, sticky="nsew", padx=(0, 15))
-        input_frame.grid_columnconfigure(0, weight=1)
-
-        input_header = ctk.CTkFrame(input_frame, fg_color=self.SECONDARY_COLOR, corner_radius=10, height=40)
-        input_header.grid(row=0, column=0, sticky="ew", padx=15, pady=(15, 10))
-        ctk.CTkLabel(input_header, text="MISSION PARAMETERS", font=ctk.CTkFont(weight="bold", size=16),
-                     text_color=self.TEXT_COLOR).grid(row=0, column=0, padx=10, pady=5)
-
-        location_frame = ctk.CTkFrame(input_frame, fg_color="transparent")
-        location_frame.grid(row=1, column=0, sticky="ew", padx=15, pady=10)
-        origin_header = ctk.CTkFrame(location_frame, fg_color="transparent")
-        origin_header.grid(row=0, column=0, sticky="ew", pady=(0, 5))
-        ctk.CTkLabel(origin_header, text="🏢", font=ctk.CTkFont(size=16)).pack(side="left", padx=(0, 5))
-        ctk.CTkLabel(origin_header, text="The Baxter Building", font=ctk.CTkFont(weight="bold")).pack(side="left")
-        self.start_entry = ctk.CTkEntry(location_frame, placeholder_text="e.g., Times Square, NY",
-                                      border_color=self.ACCENT_COLOR, border_width=1, height=35)
-        self.start_entry.grid(row=1, column=0, sticky="ew", pady=(0, 15))
-        dest_header = ctk.CTkFrame(location_frame, fg_color="transparent")
-        dest_header.grid(row=2, column=0, sticky="ew", pady=(0, 5))
-        ctk.CTkLabel(dest_header, text="🏰", font=ctk.CTkFont(size=16)).pack(side="left", padx=(0, 5))
-        ctk.CTkLabel(dest_header, text="Latveria", font=ctk.CTkFont(weight="bold")).pack(side="left")
-        self.end_entry = ctk.CTkEntry(location_frame, placeholder_text="e.g., Eiffel Tower, Paris",
-                                    border_color=self.ACCENT_COLOR, border_width=1, height=35)
-        self.end_entry.grid(row=3, column=0, sticky="ew", pady=(0, 20))
-
-        vehicle_frame = ctk.CTkFrame(input_frame, fg_color=self.SECONDARY_COLOR, corner_radius=10)
-        vehicle_frame.grid(row=2, column=0, sticky="ew", padx=15, pady=10)
-        vehicle_frame.grid_columnconfigure(0, weight=1)
-        ctk.CTkLabel(vehicle_frame, text="⚡ MODE OF TRANSPORTATION", font=ctk.CTkFont(weight="bold"),
-                     text_color=self.TEXT_COLOR).grid(row=0, column=0, padx=15, pady=(10, 5), sticky="w")
+    def create_input_panel(self, parent):
+        panel = ctk.CTkFrame(parent, fg_color=self.BG_WHITE, corner_radius=15, 
+                            border_width=0)
+        panel.grid(row=0, column=0, sticky="nsew", padx=(0, 20), pady=(0, 0))
+        panel.grid_columnconfigure(0, weight=1)
+        
+        # Elegant Header
+        header = ctk.CTkFrame(panel, fg_color=self.PRIMARY_BLUE, corner_radius=12, height=60)
+        header.grid(row=0, column=0, sticky="ew", padx=25, pady=(25, 20))
+        ctk.CTkLabel(header, text="🎯 Route Configuration", 
+                    font=ctk.CTkFont(size=18, weight="bold"),
+                    text_color=self.TEXT_LIGHT).pack(pady=15)
+        
+        # Origin Section with enhanced design
+        origin_section = ctk.CTkFrame(panel, fg_color="transparent")
+        origin_section.grid(row=1, column=0, sticky="ew", padx=25, pady=(15, 10))
+        origin_section.grid_columnconfigure(0, weight=1)
+        
+        origin_label_frame = ctk.CTkFrame(origin_section, fg_color="transparent")
+        origin_label_frame.grid(row=0, column=0, sticky="w", pady=(0, 10))
+        ctk.CTkLabel(origin_label_frame, text="🏢", font=ctk.CTkFont(size=18)).pack(side="left", padx=(0, 10))
+        ctk.CTkLabel(origin_label_frame, text="Starting Point", 
+                    font=ctk.CTkFont(size=15, weight="bold"),
+                    text_color=self.TEXT_DARK).pack(side="left")
+        
+        self.start_entry = ctk.CTkEntry(origin_section, 
+                                       placeholder_text="Enter starting location (e.g., Manila, Philippines)",
+                                       height=50,
+                                       font=ctk.CTkFont(size=14),
+                                       border_width=2,
+                                       border_color=self.BORDER_LIGHT,
+                                       fg_color=self.CARD_BG,
+                                       corner_radius=10)
+        self.start_entry.grid(row=1, column=0, sticky="ew", pady=(0, 20))
+        
+        # Destination Section
+        dest_section = ctk.CTkFrame(panel, fg_color="transparent")
+        dest_section.grid(row=2, column=0, sticky="ew", padx=25, pady=(10, 10))
+        dest_section.grid_columnconfigure(0, weight=1)
+        
+        dest_label_frame = ctk.CTkFrame(dest_section, fg_color="transparent")
+        dest_label_frame.grid(row=0, column=0, sticky="w", pady=(0, 10))
+        ctk.CTkLabel(dest_label_frame, text="📍", font=ctk.CTkFont(size=18)).pack(side="left", padx=(0, 10))
+        ctk.CTkLabel(dest_label_frame, text="Destination", 
+                    font=ctk.CTkFont(size=15, weight="bold"),
+                    text_color=self.TEXT_DARK).pack(side="left")
+        
+        self.end_entry = ctk.CTkEntry(dest_section, 
+                                     placeholder_text="Enter destination (e.g., Makati City, Philippines)",
+                                     height=50,
+                                     font=ctk.CTkFont(size=14),
+                                     border_width=2,
+                                     border_color=self.BORDER_LIGHT,
+                                     fg_color=self.CARD_BG,
+                                     corner_radius=10)
+        self.end_entry.grid(row=1, column=0, sticky="ew", pady=(0, 25))
+        
+        # Vehicle Selection with premium design
+        vehicle_frame = ctk.CTkFrame(panel, fg_color=self.CARD_BG, corner_radius=12,
+                                    border_width=2, border_color=self.BORDER_LIGHT)
+        vehicle_frame.grid(row=3, column=0, sticky="ew", padx=25, pady=(15, 20))
+        
+        vehicle_header = ctk.CTkFrame(vehicle_frame, fg_color="transparent")
+        vehicle_header.pack(fill="x", padx=25, pady=(20, 15))
+        ctk.CTkLabel(vehicle_header, text="🚗 Transportation Mode", 
+                    font=ctk.CTkFont(size=15, weight="bold"),
+                    text_color=self.TEXT_DARK).pack(anchor="w")
+        
         self.vehicle_var = tkinter.StringVar(value="car")
-        vehicles = [("🚗 Fantasticar", "car", ""), ("🚲 Bike", "bike", ""), ("👣 Foot", "foot", "")]
-        for i, (text, value, desc) in enumerate(vehicles, 1):
-            vehicle_option = ctk.CTkFrame(vehicle_frame, fg_color="transparent")
-            vehicle_option.grid(row=i, column=0, sticky="ew", padx=10, pady=2)
-            rb = ctk.CTkRadioButton(vehicle_option, text=text, variable=self.vehicle_var, value=value,
-                                     fg_color=self.BUTTON_COLOR, hover_color=self.BUTTON_HOVER,
-                                     font=ctk.CTkFont(weight="bold"))
-            rb.pack(side="left")
-            desc_label = ctk.CTkLabel(vehicle_option, text=desc, font=ctk.CTkFont(size=11),
-                                      text_color=self.TEXT_COLOR)
-            desc_label.pack(side="left", padx=(5, 0))
+        
+        vehicles = [
+            ("🚗 Car", "car", "Fastest route for driving"),
+            ("🚲 Bicycle", "bike", "Bike-friendly paths"),
+            ("🚶 Walking", "foot", "Pedestrian routes")
+        ]
+        
+        for text, value, desc in vehicles:
+            option_container = ctk.CTkFrame(vehicle_frame, fg_color="transparent")
+            option_container.pack(fill="x", padx=20, pady=8)
+            
+            option_frame = ctk.CTkFrame(option_container, fg_color="transparent")
+            option_frame.pack(anchor="w")
+            
+            ctk.CTkRadioButton(option_frame, text=text, variable=self.vehicle_var, value=value,
+                             font=ctk.CTkFont(size=14, weight="bold"),
+                             fg_color=self.PRIMARY_BLUE,
+                             hover_color=self.LIGHT_BLUE,
+                             text_color=self.TEXT_DARK).pack(side="left")
+            
+            ctk.CTkLabel(option_container, text=desc,
+                        font=ctk.CTkFont(size=12),
+                        text_color=self.TEXT_SECONDARY).pack(anchor="w", padx=(30, 0))
+        
+        # Spacer
+        ctk.CTkFrame(vehicle_frame, fg_color="transparent", height=10).pack()
+        
+        # Premium Calculate Button
+        button_container = ctk.CTkFrame(panel, fg_color="transparent")
+        button_container.grid(row=4, column=0, sticky="ew", padx=25, pady=(25, 30))
+        
+        self.get_route_button = ctk.CTkButton(
+            button_container,
+            text="🚀 CALCULATE ROUTE",
+            font=ctk.CTkFont(size=17, weight="bold"),
+            fg_color=self.ACCENT_ORANGE,
+            hover_color=self.HOVER_ORANGE,
+            height=60,
+            corner_radius=12,
+            command=self.start_route_calculation
+        )
+        self.get_route_button.pack(fill="x")
 
-        button_frame = ctk.CTkFrame(input_frame, fg_color="transparent")
-        button_frame.grid(row=4, column=0, sticky="ew", padx=15, pady=20)
-        self.get_route_button = ctk.CTkButton(button_frame, text="IT'S CLOBBERIN' TIME!",
-                                              font=ctk.CTkFont(size=18, weight="bold", family="Impact"),
-                                              fg_color=self.BUTTON_COLOR, hover_color=self.BUTTON_HOVER,
-                                              border_color=self.HIGHLIGHT_COLOR, border_width=2, height=50,
-                                              corner_radius=25, command=self.start_route_calculation)
-        self.get_route_button.pack(fill="x", pady=10)
+    # ---------------------------- OUTPUT PANEL ----------------------------
 
-    # ---------------------------- OUTPUT FRAME ----------------------------
-
-    def create_output_frame(self, parent):
-        output_frame = ctk.CTkFrame(parent, fg_color=self.THEME_COLOR, corner_radius=15,
-                                  border_color=self.ACCENT_COLOR, border_width=2)
-        output_frame.grid(row=0, column=1, sticky="nsew", padx=(15, 0))
-        output_frame.grid_rowconfigure(1, weight=1)
-        output_frame.grid_columnconfigure(0, weight=1)
-
-        output_header = ctk.CTkFrame(output_frame, fg_color=self.SECONDARY_COLOR, corner_radius=10, height=40)
-        output_header.grid(row=0, column=0, sticky="ew", padx=15, pady=(15, 10))
-        ctk.CTkLabel(output_header, text="MISSION BRIEFING", font=ctk.CTkFont(weight="bold", size=16),
-                     text_color=self.TEXT_COLOR).pack(pady=5)
-
-        summary_frame = ctk.CTkFrame(output_frame, fg_color=self.ACCENT_COLOR, corner_radius=10)
-        summary_frame.grid(row=1, column=0, sticky="ew", padx=15, pady=(0, 10))
-        summary_frame.grid_columnconfigure((0, 1), weight=1)
-        distance_container = ctk.CTkFrame(summary_frame, fg_color=self.THEME_COLOR, corner_radius=8)
-        distance_container.grid(row=0, column=0, padx=10, pady=10, sticky="ew")
-        ctk.CTkLabel(distance_container, text="📏 DISTANCE", font=ctk.CTkFont(weight="bold", size=12),
-                    text_color=self.TEXT_COLOR).pack(pady=(5, 0))
-        self.distance_label = ctk.CTkLabel(distance_container, text="--",
-                                         font=ctk.CTkFont(size=16, weight="bold"),
-                                         text_color=self.HIGHLIGHT_COLOR)
-        self.distance_label.pack(pady=(0, 5))
-
-        time_container = ctk.CTkFrame(summary_frame, fg_color=self.THEME_COLOR, corner_radius=8)
-        time_container.grid(row=0, column=1, padx=10, pady=10, sticky="ew")
-        ctk.CTkLabel(time_container, text="⏱️ TIME", font=ctk.CTkFont(weight="bold", size=12),
-                    text_color=self.TEXT_COLOR).pack(pady=(5, 0))
-        self.time_label = ctk.CTkLabel(time_container, text="--",
-                                     font=ctk.CTkFont(size=16, weight="bold"),
-                                     text_color=self.HIGHLIGHT_COLOR)
-        self.time_label.pack(pady=(0, 5))
-
-        directions_header = ctk.CTkFrame(output_frame, fg_color="transparent")
-        directions_header.grid(row=2, column=0, sticky="ew", padx=15, pady=(5, 0))
-        ctk.CTkLabel(directions_header, text="🗺️ TURN-BY-TURN DIRECTIONS",
-                    font=ctk.CTkFont(weight="bold"),
-                    text_color=self.TEXT_COLOR).pack(side="left")
-
-        self.directions_textbox = ctk.CTkTextbox(output_frame, state="disabled",
-                                                font=ctk.CTkFont(family="Consolas", size=12),
-                                                wrap="word",
-                                                border_color=self.ACCENT_COLOR, border_width=2,
-                                                corner_radius=10)
-        self.directions_textbox.grid(row=3, column=0, sticky="nsew", padx=15, pady=(5, 15))
-
-        self.map_label = ctk.CTkLabel(output_frame, text="Map Preview will appear here", fg_color=self.THEME_COLOR,
-                                     text_color=self.TEXT_COLOR, corner_radius=10, height=250)
-        self.map_label.grid(row=4, column=0, sticky="ew", padx=15, pady=(0, 15))
+    def create_output_panel(self, parent):
+        panel = ctk.CTkFrame(parent, fg_color=self.BG_WHITE, corner_radius=15)
+        panel.grid(row=0, column=1, sticky="nsew", padx=(20, 0))
+        panel.grid_rowconfigure(3, weight=0)
+        panel.grid_rowconfigure(5, weight=1)
+        panel.grid_columnconfigure(0, weight=1)
+        
+        # Header
+        header = ctk.CTkFrame(panel, fg_color=self.PRIMARY_BLUE, corner_radius=12, height=60)
+        header.grid(row=0, column=0, sticky="ew", padx=25, pady=(25, 20))
+        ctk.CTkLabel(header, text="📊 Route Information & Map", 
+                    font=ctk.CTkFont(size=18, weight="bold"),
+                    text_color=self.TEXT_LIGHT).pack(pady=15)
+        
+        # Enhanced Summary Cards
+        summary_container = ctk.CTkFrame(panel, fg_color="transparent")
+        summary_container.grid(row=1, column=0, sticky="ew", padx=25, pady=(0, 20))
+        summary_container.grid_columnconfigure((0, 1), weight=1)
+        
+        # Distance Card
+        distance_card = ctk.CTkFrame(summary_container, fg_color=self.CARD_BG, 
+                                    corner_radius=12, border_width=2, border_color=self.BORDER_LIGHT)
+        distance_card.grid(row=0, column=0, sticky="ew", padx=(0, 12))
+        ctk.CTkLabel(distance_card, text="📏 Total Distance", 
+                    font=ctk.CTkFont(size=13, weight="bold"),
+                    text_color=self.TEXT_SECONDARY).pack(pady=(20, 8))
+        self.distance_label = ctk.CTkLabel(distance_card, text="-- km",
+                                         font=ctk.CTkFont(size=28, weight="bold"),
+                                         text_color=self.PRIMARY_BLUE)
+        self.distance_label.pack(pady=(0, 20))
+        
+        # Time Card
+        time_card = ctk.CTkFrame(summary_container, fg_color=self.CARD_BG, 
+                                corner_radius=12, border_width=2, border_color=self.BORDER_LIGHT)
+        time_card.grid(row=0, column=1, sticky="ew", padx=(12, 0))
+        ctk.CTkLabel(time_card, text="⏱️ Estimated Time", 
+                    font=ctk.CTkFont(size=13, weight="bold"),
+                    text_color=self.TEXT_SECONDARY).pack(pady=(20, 8))
+        self.time_label = ctk.CTkLabel(time_card, text="-- min",
+                                      font=ctk.CTkFont(size=28, weight="bold"),
+                                      text_color=self.PRIMARY_BLUE)
+        self.time_label.pack(pady=(0, 20))
+        
+        # Map Preview Section - Enhanced
+        map_section = ctk.CTkFrame(panel, fg_color="transparent")
+        map_section.grid(row=2, column=0, sticky="nsew", padx=25, pady=(10, 15))
+        map_section.grid_rowconfigure(1, weight=1)
+        map_section.grid_columnconfigure(0, weight=1)
+        
+        map_header = ctk.CTkFrame(map_section, fg_color="transparent")
+        map_header.grid(row=0, column=0, sticky="ew", pady=(0, 10))
+        ctk.CTkLabel(map_header, text="🗺️ Route Map Preview",
+                    font=ctk.CTkFont(size=15, weight="bold"),
+                    text_color=self.TEXT_DARK).pack(anchor="w")
+        
+        # Map container with better aspect ratio
+        map_container = ctk.CTkFrame(map_section, fg_color=self.CARD_BG, 
+                                    corner_radius=12, border_width=2, border_color=self.BORDER_LIGHT)
+        map_container.grid(row=1, column=0, sticky="nsew")
+        map_container.grid_rowconfigure(0, weight=1)
+        map_container.grid_columnconfigure(0, weight=1)
+        
+        # Loading overlay
+        self.loading_frame = ctk.CTkFrame(map_container, fg_color=self.CARD_BG, corner_radius=12)
+        self.loading_frame.grid(row=0, column=0, sticky="nsew")
+        self.loading_frame.grid_columnconfigure(0, weight=1)
+        self.loading_frame.grid_rowconfigure(0, weight=1)
+        
+        loading_content = ctk.CTkFrame(self.loading_frame, fg_color="transparent")
+        loading_content.place(relx=0.5, rely=0.5, anchor="center")
+        
+        self.loading_label = ctk.CTkLabel(loading_content, text="🗺️",
+                                         font=ctk.CTkFont(size=50))
+        self.loading_label.pack(pady=(0, 15))
+        
+        self.loading_text = ctk.CTkLabel(loading_content, 
+                                        text="Map preview will appear here\nafter calculating route",
+                                        font=ctk.CTkFont(size=14),
+                                        text_color=self.TEXT_SECONDARY,
+                                        justify="center")
+        self.loading_text.pack()
+        
+        # Map label (hidden initially)
+        self.map_label = ctk.CTkLabel(map_container, text="", corner_radius=12)
+        
+        # Directions Section
+        directions_section = ctk.CTkFrame(panel, fg_color="transparent")
+        directions_section.grid(row=4, column=0, sticky="ew", padx=25, pady=(15, 10))
+        ctk.CTkLabel(directions_section, text="🧭 Turn-by-Turn Directions",
+                    font=ctk.CTkFont(size=15, weight="bold"),
+                    text_color=self.TEXT_DARK).pack(anchor="w")
+        
+        self.directions_textbox = ctk.CTkTextbox(
+            panel,
+            state="disabled",
+            font=ctk.CTkFont(family="Segoe UI", size=13),
+            wrap="word",
+            fg_color=self.CARD_BG,
+            border_width=2,
+            border_color=self.BORDER_LIGHT,
+            corner_radius=10,
+            height=200
+        )
+        self.directions_textbox.grid(row=5, column=0, sticky="nsew", padx=25, pady=(5, 25))
 
     # ---------------------------- STATUS BAR ----------------------------
 
     def create_status_bar(self):
-        self.status_label = ctk.CTkLabel(self, text="Ready", font=ctk.CTkFont(size=12), anchor="w",
-                                        fg_color=self.THEME_COLOR, text_color=self.TEXT_COLOR)
-        self.status_label.grid(row=2, column=0, sticky="ew")
+        status_frame = ctk.CTkFrame(self, fg_color=self.PRIMARY_BLUE, corner_radius=0, height=45)
+        status_frame.grid(row=2, column=0, sticky="ew")
+        
+        self.status_label = ctk.CTkLabel(
+            status_frame,
+            text="✓ Ready to calculate routes",
+            font=ctk.CTkFont(size=13),
+            text_color=self.TEXT_LIGHT,
+            anchor="w"
+        )
+        self.status_label.pack(side="left", padx=50, pady=12)
+
+    # ---------------------------- LOADING ANIMATION ----------------------------
+
+    def show_loading(self):
+        self.loading_frame.tkraise()
+        self.animate_loading()
+    
+    def animate_loading(self):
+        if not self.is_calculating:
+            return
+        
+        emojis = ["🗺️", "🌍", "🧭", "📍"]
+        current_text = self.loading_label.cget("text")
+        current_index = emojis.index(current_text) if current_text in emojis else 0
+        next_index = (current_index + 1) % len(emojis)
+        
+        self.loading_label.configure(text=emojis[next_index])
+        self.after(300, self.animate_loading)
+    
+    def hide_loading(self):
+        self.is_calculating = False
+        self.map_label.tkraise()
 
     # ---------------------------- ROUTE LOGIC ----------------------------
 
     def start_route_calculation(self):
+        if self.is_calculating:
+            return
         threading.Thread(target=self.calculate_route, daemon=True).start()
 
     def calculate_route(self):
-        self.status_label.configure(text="🛠️ Calculating route...")
-        self.get_route_button.configure(state="disabled")
+        self.is_calculating = True
+        self.status_label.configure(text="⏳ Calculating optimal route...")
+        self.get_route_button.configure(state="disabled", text="⏳ CALCULATING...", 
+                                       fg_color=self.TEXT_SECONDARY)
+        
+        # Show loading animation
+        self.loading_text.configure(text="Calculating route...\nPlease wait")
+        self.show_loading()
+        
         start_location = self.start_entry.get()
         end_location = self.end_entry.get()
         vehicle = self.vehicle_var.get()
 
         start_data = self.api_logic.geocode(start_location)
         if start_data["status"] == "error":
-            self.status_label.configure(text=f"❌ {start_data['message']}")
-            self.get_route_button.configure(state="normal")
+            self.is_calculating = False
+            self.status_label.configure(text=f"❌ Error: {start_data['message']}")
+            self.get_route_button.configure(state="normal", text="🚀 CALCULATE ROUTE",
+                                          fg_color=self.ACCENT_ORANGE)
+            self.loading_text.configure(text="Map preview will appear here\nafter calculating route")
             return
+            
         end_data = self.api_logic.geocode(end_location)
         if end_data["status"] == "error":
-            self.status_label.configure(text=f"❌ {end_data['message']}")
-            self.get_route_button.configure(state="normal")
+            self.is_calculating = False
+            self.status_label.configure(text=f"❌ Error: {end_data['message']}")
+            self.get_route_button.configure(state="normal", text="🚀 CALCULATE ROUTE",
+                                          fg_color=self.ACCENT_ORANGE)
+            self.loading_text.configure(text="Map preview will appear here\nafter calculating route")
             return
 
-        route_data = self.api_logic.get_route({"lat": start_data["lat"], "lng": start_data["lng"]},
-                                             {"lat": end_data["lat"], "lng": end_data["lng"]},
-                                             vehicle)
+        route_data = self.api_logic.get_route(
+            {"lat": start_data["lat"], "lng": start_data["lng"]},
+            {"lat": end_data["lat"], "lng": end_data["lng"]},
+            vehicle
+        )
+        
         if route_data["status"] == "error":
-            self.status_label.configure(text=f"❌ {route_data['message']}")
-            self.get_route_button.configure(state="normal")
+            self.is_calculating = False
+            self.status_label.configure(text=f"❌ Error: {route_data['message']}")
+            self.get_route_button.configure(state="normal", text="🚀 CALCULATE ROUTE",
+                                          fg_color=self.ACCENT_ORANGE)
+            self.loading_text.configure(text="Map preview will appear here\nafter calculating route")
             return
 
         path = route_data["data"]["paths"][0]
         distance_km = path["distance"] / 1000
         time_min = path["time"] / 60000
         instructions = path["instructions"]
-        directions_text = "\n".join([f"{i+1}. {inst['text']}" for i, inst in enumerate(instructions)])
-
+        
+        # Extract route coordinates for map display
+        route_points = None
+        if "points" in path and "coordinates" in path["points"]:
+            route_points = path["points"]["coordinates"]
+        
+        directions_text = ""
+        for i, inst in enumerate(instructions, 1):
+            directions_text += f"{i}. {inst['text']}\n"
+        
         self.distance_label.configure(text=f"{distance_km:.2f} km")
-        self.time_label.configure(text=f"{time_min:.1f} min")
+        
+        if time_min >= 60:
+            hours = int(time_min // 60)
+            mins = int(time_min % 60)
+            self.time_label.configure(text=f"{hours}h {mins}m")
+        else:
+            self.time_label.configure(text=f"{time_min:.0f} min")
+        
         self.directions_textbox.configure(state="normal")
         self.directions_textbox.delete("1.0", "end")
         self.directions_textbox.insert("1.0", directions_text)
         self.directions_textbox.configure(state="disabled")
 
-        self.update_map_preview({"lat": start_data["lat"], "lng": start_data["lng"]},
-                                {"lat": end_data["lat"], "lng": end_data["lng"]})
+        # Update map with actual route path
+        self.update_map_preview(
+            {"lat": start_data["lat"], "lng": start_data["lng"]},
+            {"lat": end_data["lat"], "lng": end_data["lng"]},
+            route_points
+        )
 
-        self.status_label.configure(text="✅ Route calculation complete!")
-        self.get_route_button.configure(state="normal")
+        self.status_label.configure(text=f"✓ Route calculated successfully! Distance: {distance_km:.2f} km • Time: {time_min:.0f} min")
+        self.get_route_button.configure(state="normal", text="🚀 CALCULATE ROUTE",
+                                       fg_color=self.ACCENT_ORANGE)
         
-    def update_map_preview(self, start_coords, end_coords):
-        url = self.api_logic.get_static_map_url(start_coords, end_coords)
+    def update_map_preview(self, start_coords, end_coords, route_points=None):
+        url = self.api_logic.get_static_map_url(start_coords, end_coords, route_points, width=1000, height=500)
         if not url:
-            self.map_label.configure(text="Google Maps API key not found")
+            self.is_calculating = False
+            self.loading_text.configure(text="⚠️ Google Maps API key not configured")
             return
+        
         try:
-            response = requests.get(url)
+            self.loading_text.configure(text="Loading map...\nPlease wait")
+            response = requests.get(url, timeout=15)
             image = Image.open(BytesIO(response.content))
-            # Use the new resampling enum instead of the removed ANTIALIAS
-            image = image.resize((600, 250), Image.Resampling.LANCZOS)
+            
+            # Get the actual dimensions of the map container
+            # Maintain 2:1 aspect ratio for better map visibility
+            display_width = 750
+            display_height = 375
+            
+            # Resize with high quality
+            image = image.resize((display_width, display_height), Image.Resampling.LANCZOS)
+            
             self.map_photo = ImageTk.PhotoImage(image)
             self.map_label.configure(image=self.map_photo, text="")
+            self.map_label.grid(row=0, column=0, sticky="nsew", padx=15, pady=15)
+            
+            # Hide loading and show map
+            self.hide_loading()
+            
         except Exception as e:
-            self.map_label.configure(text=f"Failed to load map: {str(e)}")
+            self.is_calculating = False
+            self.loading_text.configure(text=f"⚠️ Failed to load map preview\n{str(e)}")
 
 
 # =======================================================================================
