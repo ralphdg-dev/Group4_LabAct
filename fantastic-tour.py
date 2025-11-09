@@ -21,10 +21,45 @@ class RouteAPI:
         self.geocode_url = "https://graphhopper.com/api/1/geocode?"
         self.key = GRAPHOPPER_API_KEY
     
-    def geocode(self, location):
-        """Geocodes a location string to get its latitude and longitude."""
+    def validate_api_key(self):
+        """Validate that API key is available and properly configured"""
+        if not self.key:
+            return {"status": "error", "message": "API key not found. Please check your .env file."}
+        if not isinstance(self.key, str) or len(self.key.strip()) == 0:
+            return {"status": "error", "message": "Invalid API key format."}
+        return {"status": "success"}
+    
+    def validate_location_input(self, location):
+        """Validate location input before making API call"""
         if not location or not location.strip():
             return {"status": "error", "message": "Location cannot be empty."}
+        if len(location.strip()) < 2:
+            return {"status": "error", "message": "Location must be at least 2 characters long."}
+        if len(location) > 200:
+            return {"status": "error", "message": "Location is too long (max 200 characters)."}
+        # Basic injection prevention
+        if any(char in location for char in ['<', '>', ';', '|', '&', '$']):
+            return {"status": "error", "message": "Invalid characters in location."}
+        return {"status": "success"}
+    
+    def validate_vehicle_type(self, vehicle):
+        """Validate that vehicle type is supported"""
+        valid_vehicles = ['car', 'bike', 'foot']
+        if vehicle not in valid_vehicles:
+            return {"status": "error", "message": f"Invalid vehicle type. Must be one of: {', '.join(valid_vehicles)}"}
+        return {"status": "success"}
+
+    def geocode(self, location):
+        """Geocodes a location string to get its latitude and longitude."""
+        # Input validation
+        validation_result = self.validate_location_input(location)
+        if validation_result["status"] == "error":
+            return validation_result
+
+        # API key validation
+        api_key_check = self.validate_api_key()
+        if api_key_check["status"] == "error":
+            return api_key_check
 
         url = self.geocode_url + urllib.parse.urlencode({
             "q": location,
@@ -33,34 +68,130 @@ class RouteAPI:
         })
         try:
             response = requests.get(url, timeout=10)
+            
+            # Check for HTTP errors
+            if response.status_code == 401:
+                return {"status": "error", "message": "Invalid API key. Please check your credentials."}
+            elif response.status_code == 403:
+                return {"status": "error", "message": "API access forbidden. Check your API key permissions."}
+            elif response.status_code == 429:
+                return {"status": "error", "message": "API rate limit exceeded. Please try again later."}
+            elif response.status_code >= 500:
+                return {"status": "error", "message": "Server error. Please try again later."}
+            elif response.status_code != 200:
+                return {"status": "error", "message": f"API returned status code: {response.status_code}"}
+            
             data = response.json()
+            
+            # Validate response structure
+            if not isinstance(data, dict):
+                return {"status": "error", "message": "Invalid API response format."}
+                
             if response.status_code == 200 and data.get("hits"):
                 point = data["hits"][0]["point"]
+                # Validate coordinate data
+                if not all(key in point for key in ['lat', 'lng']):
+                    return {"status": "error", "message": "Invalid coordinate data in API response."}
+                
+                # Validate coordinate ranges
+                if not (-90 <= point["lat"] <= 90 and -180 <= point["lng"] <= 180):
+                    return {"status": "error", "message": "Invalid coordinate values received."}
+                
                 name = data["hits"][0].get("name", "Unknown")
                 country = data["hits"][0].get("country", "")
                 state = data["hits"][0].get("state", "")
                 full_name = f"{name}, {state}, {country}".strip(", ")
                 return {"status": "success", "lat": point["lat"], "lng": point["lng"], "name": full_name}
             else:
-                return {"status": "error", "message": data.get("message", f"No results for {location}")}
+                error_msg = data.get("message", f"No results found for '{location}'")
+                if "hits" not in data:
+                    error_msg = "Invalid response format from geocoding service."
+                return {"status": "error", "message": error_msg}
+                
+        except requests.exceptions.Timeout:
+            return {"status": "error", "message": "Geocoding request timed out. Please try again."}
+        except requests.exceptions.ConnectionError:
+            return {"status": "error", "message": "Network connection error. Please check your internet connection."}
         except requests.exceptions.RequestException as e:
-            return {"status": "error", "message": f"Network error: {e}"}
+            return {"status": "error", "message": f"Network error: {str(e)}"}
+        except ValueError as e:
+            return {"status": "error", "message": "Invalid JSON response from server."}
+        except Exception as e:
+            return {"status": "error", "message": f"Unexpected error: {str(e)}"}
 
     def get_route(self, start_coords, end_coords, vehicle):
         """Fetches the route between two points for a given vehicle."""
+        # Validate coordinates
+        if not all(isinstance(coord, dict) for coord in [start_coords, end_coords]):
+            return {"status": "error", "message": "Invalid coordinate data."}
+        
+        if not all(key in start_coords for key in ['lat', 'lng']) or not all(key in end_coords for key in ['lat', 'lng']):
+            return {"status": "error", "message": "Missing coordinate data."}
+        
+        # Validate coordinate ranges
+        if not all(-90 <= coord['lat'] <= 90 and -180 <= coord['lng'] <= 180 for coord in [start_coords, end_coords]):
+            return {"status": "error", "message": "Invalid coordinate values."}
+        
+        # Validate vehicle type
+        vehicle_validation = self.validate_vehicle_type(vehicle)
+        if vehicle_validation["status"] == "error":
+            return vehicle_validation
+
+        # API key validation
+        api_key_check = self.validate_api_key()
+        if api_key_check["status"] == "error":
+            return api_key_check
+
         op = f"&point={start_coords['lat']},{start_coords['lng']}"
         dp = f"&point={end_coords['lat']},{end_coords['lng']}"
         
         url = self.route_url + urllib.parse.urlencode({"key": self.key, "vehicle": vehicle}) + op + dp
+        
         try:
             response = requests.get(url, timeout=15)
+            
+            # Check for HTTP errors
+            if response.status_code == 401:
+                return {"status": "error", "message": "Invalid API key for routing service."}
+            elif response.status_code == 403:
+                return {"status": "error", "message": "Routing API access forbidden."}
+            elif response.status_code == 429:
+                return {"status": "error", "message": "Routing API rate limit exceeded."}
+            elif response.status_code >= 500:
+                return {"status": "error", "message": "Routing server error. Please try again later."}
+            elif response.status_code != 200:
+                return {"status": "error", "message": f"Routing API returned status code: {response.status_code}"}
+            
             data = response.json()
+            
+            # Validate response structure
+            if not isinstance(data, dict):
+                return {"status": "error", "message": "Invalid routing response format."}
+                
             if response.status_code == 200:
+                # Validate route data structure
+                if 'paths' not in data or not data['paths']:
+                    return {"status": "error", "message": "No route path found in response."}
+                
+                path = data['paths'][0]
+                if 'distance' not in path or 'time' not in path:
+                    return {"status": "error", "message": "Incomplete route data in response."}
+                
                 return {"status": "success", "data": data}
             else:
-                return {"status": "error", "message": data.get("message", "Routing API error")}
+                error_msg = data.get("message", "Routing API error")
+                return {"status": "error", "message": error_msg}
+                
+        except requests.exceptions.Timeout:
+            return {"status": "error", "message": "Routing request timed out. Please try again."}
+        except requests.exceptions.ConnectionError:
+            return {"status": "error", "message": "Network connection error during routing."}
         except requests.exceptions.RequestException as e:
-            return {"status": "error", "message": f"Network error: {e}"}
+            return {"status": "error", "message": f"Network error during routing: {str(e)}"}
+        except ValueError as e:
+            return {"status": "error", "message": "Invalid JSON response from routing service."}
+        except Exception as e:
+            return {"status": "error", "message": f"Unexpected routing error: {str(e)}"}
 
 # =======================================================================================
 # SECTION 2: GUI APPLICATION
@@ -80,6 +211,9 @@ class FantasticRouterApp(ctk.CTk):
         self.NEW_BACKGROUND = "#feefce"  # Cream background
         self.SECONDARY_COLOR = "#5a4a78"  # Purple for accents
         self.HIGHLIGHT_COLOR = "#f0c850"  # Yellow for highlights
+        self.ERROR_COLOR = "#e74c3c"     # Error red
+        self.WARNING_COLOR = "#f39c12"   # Warning orange
+        self.SUCCESS_COLOR = "#27ae60"   # Success green
 
         ctk.set_appearance_mode("Dark")
         ctk.set_default_color_theme("blue")
@@ -353,25 +487,90 @@ class FantasticRouterApp(ctk.CTk):
         )
         version_label.grid(row=0, column=1, sticky="e", padx=15)
 
+    def validate_user_input(self):
+        """Validate all user inputs before processing"""
+        start_loc = self.start_entry.get().strip()
+        dest_loc = self.end_entry.get().strip()
+        
+        # Check for empty inputs
+        if not start_loc:
+            self.show_error_message("Please enter a starting location.")
+            return False
+            
+        if not dest_loc:
+            self.show_error_message("Please enter a destination.")
+            return False
+        
+        # Check for minimum length
+        if len(start_loc) < 2:
+            self.show_error_message("Starting location must be at least 2 characters long.")
+            return False
+            
+        if len(dest_loc) < 2:
+            self.show_error_message("Destination must be at least 2 characters long.")
+            return False
+        
+        # Check for maximum length
+        if len(start_loc) > 200:
+            self.show_error_message("Starting location is too long (max 200 characters).")
+            return False
+            
+        if len(dest_loc) > 200:
+            self.show_error_message("Destination is too long (max 200 characters).")
+            return False
+        
+        # Check for identical locations
+        if start_loc.lower() == dest_loc.lower():
+            self.show_warning_message("Starting location and destination are the same. Please choose different locations.")
+            return False
+            
+        return True
+
+    def show_error_message(self, message):
+        """Display error message in status bar"""
+        self.update_status(f"❌ {message}", "red")
+
+    def show_warning_message(self, message):
+        """Display warning message in status bar"""
+        self.update_status(f"⚠️ {message}", "orange")
+
+    def show_success_message(self, message):
+        """Display success message in status bar"""
+        self.update_status(f"✅ {message}", "green")
+
     def start_route_calculation(self):
         """Disables the button and starts the API calls in a new thread to prevent GUI freezing."""
+        if not self.validate_user_input():
+            return
+            
         self.get_route_button.configure(state="disabled", text="RECALIBRATING...")
+        # Clear previous results
+        self.clear_results()
+        
         # Create and start a new thread
         thread = threading.Thread(target=self.get_route_logic)
         thread.daemon = True # Allows main program to exit even if thread is running
         thread.start()
 
+    def clear_results(self):
+        """Clear previous route results"""
+        self.distance_label.configure(text="--")
+        self.time_label.configure(text="--")
+        self.directions_textbox.configure(state="normal")
+        self.directions_textbox.delete("1.0", "end")
+        self.directions_textbox.configure(state="disabled")
+
     def get_route_logic(self):
         """The core logic that runs in the background thread."""
-        start_loc = self.start_entry.get()
-        dest_loc = self.end_entry.get()
+        start_loc = self.start_entry.get().strip()
+        dest_loc = self.end_entry.get().strip()
         vehicle = self.vehicle_var.get()
 
         # --- Geocode Origin ---
         self.update_status("🔍 Analyzing origin coordinates...", "blue")
         orig = self.api_logic.geocode(start_loc)
         if orig['status'] == 'error':
-            self.update_status(f"❌ Origin Error: {orig['message']}", "red")
+            self.show_error_message(f"Origin Error: {orig['message']}")
             self.reset_button()
             return
 
@@ -379,12 +578,13 @@ class FantasticRouterApp(ctk.CTk):
         self.update_status(f"📍 Found {orig['name']}. Analyzing destination...", "blue")
         dest = self.api_logic.geocode(dest_loc)
         if dest['status'] == 'error':
-            self.update_status(f"❌ Destination Error: {dest['message']}", "red")
+            self.show_error_message(f"Destination Error: {dest['message']}")
             self.reset_button()
             return
         
+        # Check if coordinates are identical (same location)
         if orig['lat'] == dest['lat'] and orig['lng'] == dest['lng']:
-            self.update_status("🔥 Flame Off! Origin and destination are the same.", "orange")
+            self.show_warning_message("Origin and destination coordinates are identical. Please choose different locations.")
             self.reset_button()
             return
 
@@ -392,7 +592,7 @@ class FantasticRouterApp(ctk.CTk):
         self.update_status(f"🎯 Found {dest['name']}. Plotting course... Flame On! 🔥", "blue")
         route_info = self.api_logic.get_route(orig, dest, vehicle)
         if route_info['status'] == 'error':
-            self.update_status(f"❌ Routing Error: {route_info['message']}", "red")
+            self.show_error_message(f"Routing Error: {route_info['message']}")
             self.reset_button()
             return
 
@@ -402,50 +602,92 @@ class FantasticRouterApp(ctk.CTk):
         
     def display_results(self, data):
         """Formats the API data and updates the GUI components."""
-        path = data['paths'][0]
-        
-        # Format Summary
-        distance = self.format_distance(path['distance'])
-        time = self.format_time(path['time'])
-        self.distance_label.configure(text=f"{distance}")
-        self.time_label.configure(text=f"{time}")
-        
-        # Format Directions
-        directions_text = "🚀 FANTASTIC TOUR MISSION BRIEFING 🚀\n" + "="*50 + "\n\n"
-        for i, instruction in enumerate(path['instructions'], 1):
-            dist = self.format_distance(instruction['distance'])
-            text = instruction['text']
-            # Enhanced icons for better visual representation
-            if "arrived" in text.lower():
-                icon = "🏁 ARRIVED"
-            elif "turn left" in text.lower():
-                icon = "↩️ LEFT"
-            elif "turn right" in text.lower():
-                icon = "↪️ RIGHT"
-            elif "roundabout" in text.lower():
-                icon = "🔄 ROUND"
-            elif "keep" in text.lower():
-                icon = "⬆️ CONTINUE"
-            elif "exit" in text.lower():
-                icon = "🚪 EXIT"
-            else:
-                icon = "➡️ NEXT"
+        try:
+            # Validate data structure
+            if not data or 'paths' not in data or not data['paths']:
+                self.show_error_message("Invalid route data received.")
+                self.reset_button()
+                return
                 
-            directions_text += f"{i:>2}. {icon:<12} {text:<40} [{dist}]\n"
-        
-        directions_text += f"\n{'='*50}\n✨ MISSION ACCOMPLISHED! ✨"
-        
-        self.directions_textbox.configure(state="normal")
-        self.directions_textbox.delete("1.0", "end")
-        self.directions_textbox.insert("1.0", directions_text)
-        self.directions_textbox.configure(state="disabled")
+            path = data['paths'][0]
+            
+            # Validate required fields
+            if 'distance' not in path or 'time' not in path:
+                self.show_error_message("Incomplete route data received.")
+                self.reset_button()
+                return
+            
+            # Validate numerical values
+            if not isinstance(path['distance'], (int, float)) or path['distance'] < 0:
+                self.show_error_message("Invalid distance value in route data.")
+                self.reset_button()
+                return
+                
+            if not isinstance(path['time'], (int, float)) or path['time'] < 0:
+                self.show_error_message("Invalid time value in route data.")
+                self.reset_button()
+                return
 
-        self.reset_button()
-        self.update_status("🎉 Mission accomplished! Route briefing ready.", "green")
+            # Format Summary
+            distance = self.format_distance(path['distance'])
+            time = self.format_time(path['time'])
+            self.distance_label.configure(text=f"{distance}")
+            self.time_label.configure(text=f"{time}")
+            
+            # Format Directions
+            directions_text = "🚀 FANTASTIC TOUR MISSION BRIEFING 🚀\n" + "="*50 + "\n\n"
+            
+            # Validate instructions data
+            if 'instructions' not in path or not path['instructions']:
+                directions_text += "No turn-by-turn instructions available for this route.\n"
+            else:
+                for i, instruction in enumerate(path['instructions'], 1):
+                    # Validate instruction structure
+                    if not isinstance(instruction, dict) or 'text' not in instruction or 'distance' not in instruction:
+                        continue
+                        
+                    dist = self.format_distance(instruction['distance'])
+                    text = instruction['text']
+                    # Enhanced icons for better visual representation
+                    if "arrived" in text.lower():
+                        icon = "🏁 ARRIVED"
+                    elif "turn left" in text.lower():
+                        icon = "↩️ LEFT"
+                    elif "turn right" in text.lower():
+                        icon = "↪️ RIGHT"
+                    elif "roundabout" in text.lower():
+                        icon = "🔄 ROUND"
+                    elif "keep" in text.lower():
+                        icon = "⬆️ CONTINUE"
+                    elif "exit" in text.lower():
+                        icon = "🚪 EXIT"
+                    else:
+                        icon = "➡️ NEXT"
+                        
+                    directions_text += f"{i:>2}. {icon:<12} {text:<40} [{dist}]\n"
+            
+            directions_text += f"\n{'='*50}\n✨ MISSION ACCOMPLISHED! ✨"
+            
+            self.directions_textbox.configure(state="normal")
+            self.directions_textbox.delete("1.0", "end")
+            self.directions_textbox.insert("1.0", directions_text)
+            self.directions_textbox.configure(state="disabled")
+
+            self.reset_button()
+            self.show_success_message("Mission accomplished! Route briefing ready.")
+            
+        except Exception as e:
+            self.show_error_message(f"Error displaying results: {str(e)}")
+            self.reset_button()
         
     def update_status(self, message, color):
         """Updates the status bar text and color safely from any thread."""
-        colors = {"blue": self.ACCENT_COLOR, "red": "#E01E1E", "green": "#1FB03A", "orange": self.BUTTON_COLOR}
+        colors = {
+            "blue": self.ACCENT_COLOR, 
+            "red": self.ERROR_COLOR, 
+            "green": self.SUCCESS_COLOR, 
+            "orange": self.WARNING_COLOR
+        }
         self.after(0, lambda: self.status_label.configure(
             text=f"  {message}", 
             text_color=colors.get(color, self.TEXT_COLOR)
@@ -460,6 +702,10 @@ class FantasticRouterApp(ctk.CTk):
 
     # --- Formatting Helper Functions ---
     def format_distance(self, meters):
+        """Format distance with validation"""
+        if not isinstance(meters, (int, float)) or meters < 0:
+            return "Invalid distance"
+            
         if self.unit_var.get() == "metric":
             return f"{meters/1000:.2f} km" if meters >= 1000 else f"{meters:.0f} m"
         else: # imperial
@@ -467,6 +713,10 @@ class FantasticRouterApp(ctk.CTk):
             return f"{miles:.2f} miles" if miles >= 0.1 else f"{meters * 3.28084:.0f} ft"
 
     def format_time(self, milliseconds):
+        """Format time with validation"""
+        if not isinstance(milliseconds, (int, float)) or milliseconds < 0:
+            return "Invalid time"
+            
         s = milliseconds / 1000
         h, s = divmod(s, 3600)
         m, s = divmod(s, 60)
